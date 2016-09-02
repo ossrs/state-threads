@@ -422,7 +422,7 @@
 #define MD_STACK_GROWS_DOWN
 
 #if defined(__GLIBC__) && __GLIBC__ >= 2
-#define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[20]
+#define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8] /*by SRS, 20=>8 for ARM*/
 #else
 #error "ARM/Linux pre-glibc2 not supported yet"
 #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */
