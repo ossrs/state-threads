@@ -310,6 +310,11 @@ LINKNAME    =
 EXAMPLES    =
 endif
 
+# for SRS
+# disable examples for ubuntu crossbuild failed.
+# @see https://github.com/winlinvip/simple-rtmp-server/issues/308
+EXAMPLES =
+
 ifeq ($(OS), DARWIN)
 LINKNAME    = libst.$(DSO_SUFFIX)
 SONAME      = libst.$(MAJOR).$(DSO_SUFFIX)
