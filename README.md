@@ -6,7 +6,7 @@ see: https://github.com/winlinvip/state-threads/blob/master/README
 
 ## Branch SRS
 
-The branch [srs](tree/srs) patched the following patches and refined the TAB.
+The branch [srs](https://github.com/ossrs/state-threads/tree/srs) patched the following patches and refined the TAB.
 
 1. [st.arm.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/1.st.arm.patch), for ARM.
 1. [st.osx.kqueue.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/3.st.osx.kqueue.patch), for osx.
