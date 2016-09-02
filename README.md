@@ -1,8 +1,9 @@
 state-threads
 =============
 
-fork from http://sourceforge.net/projects/state-threads, nothing changed.<br/>
-see: https://github.com/winlinvip/state-threads/blob/master/README
+Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https://github.com/ossrs/srs/tree/2.0release).
+
+> See: https://github.com/winlinvip/state-threads/blob/master/README
 
 ## Branch SRS
 
