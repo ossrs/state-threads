@@ -424,7 +424,7 @@
             #define MD_USE_BUILTIN_SETJMP
             
             #ifndef JB_RSP
-                #define JB_RSP 8 // 这里的JB_RSP的具体数值要跟md.S里面的保存位置对应
+                #define JB_RSP 8 // JB_RSP must be same as the index we save in jmpbuf
             #endif
             #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[JB_RSP]
 
