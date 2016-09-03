@@ -7,11 +7,14 @@ Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https
 
 ## Branch SRS
 
-The branch [srs](https://github.com/ossrs/state-threads/tree/srs) patched the following patches and refined the TAB.
+The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patched the following patches:
 
-1. [st.arm.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/1.st.arm.patch), for ARM.
-1. [st.osx.kqueue.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/3.st.osx.kqueue.patch), for osx.
-1. [st.disable.examples.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/4.st.disable.examples.patch), for ubuntu.
+- [x] Patch [st.arm.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/1.st.arm.patch), for ARM.
+- [x] Patch [st.osx.kqueue.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/3.st.osx.kqueue.patch), for osx.
+- [x] Patch [st.disable.examples.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/4.st.disable.examples.patch), for ubuntu.
+- [x] [Refine TAB of code](https://github.com/ossrs/state-threads/compare/c2001d30ca58f55d72a6cc6b9b6c70391eaf14db...d2101b26988b0e0db0aabc53ddf452068c1e2cbc).
+- [ ] [Support buildin setjmp/longjmp for ARM](https://github.com/ossrs/state-threads/issues/1).
+- [ ] [Support valgrind for ST](https://github.com/ossrs/state-threads/issues/2).
 
 ## Usage
 
