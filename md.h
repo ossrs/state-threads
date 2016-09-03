@@ -420,13 +420,14 @@
 
         #elif defined(__arm__)
             #define MD_STACK_GROWS_DOWN
-
             #define MD_USE_BUILTIN_SETJMP
-            
-            #ifndef JB_RSP
-                #define JB_RSP 8 // JB_RSP must be same as the index we save in jmpbuf
-            #endif
-            #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[JB_RSP]
+
+            #if defined(__GLIBC__) && __GLIBC__ >= 2
+                /* Merge from https://github.com/michaeltalyansky/state-threads/commit/56554a5c425aee8e7a73782eae23d74d83c4120a */
+                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8]
+            #else
+                #error "ARM/Linux pre-glibc2 not supported yet"
+            #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */
 
         #elif defined(__s390__)
             #define MD_STACK_GROWS_DOWN

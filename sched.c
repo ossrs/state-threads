@@ -516,7 +516,7 @@ void st_thread_interrupt(_st_thread_t *thread)
 
 
 /* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
-#if defined(__arm__)
+#if defined(__arm__) && !defined(MD_USE_BUILTIN_SETJMP) && __GLIBC_MINOR__ >= 19
     extern unsigned long  __pointer_chk_guard;
     #define PTR_MANGLE(var) \
         (var) = (__typeof (var)) ((unsigned long) (var) ^ __pointer_chk_guard)
@@ -595,7 +595,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinabl
     
 #ifndef __ia64__
     /* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
-    #if defined(__arm__)
+    #if defined(__arm__) && !defined(MD_USE_BUILTIN_SETJMP) && __GLIBC_MINOR__ >= 19
         volatile void * lsp = PTR_MANGLE(stack->sp);
         if (_setjmp ((thread)->context))
             _st_thread_main();
