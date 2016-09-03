@@ -462,6 +462,40 @@
 #elif defined(__arm__)
 
     /* TODO: FIXME: implement setjmp and longjmp for ARM */
+    .globl _st_md_cxt_save
+        .type _st_md_cxt_save, %function
+        .align 2
+    _st_md_cxt_save:
+        mov     ip, r0 // r0 is the param jmpbuf ptr address.
+        // Save registers like
+        // *ip++ = v1
+        // *ip++ = ...
+        // *ip++ = v6
+        // *ip++ = sl
+        // *ip++ = fp
+        stmia   ip!, {v1-v6, sl, fp} // TODO: compatible with other ARM version.
+        movs    r2, sp
+        stmia   ip!, {r2, lr}
+        mov     r0, #0               // r0 save the return value(0) of setjmp.
+        bx      lr                   // return
+     .size _st_md_cxt_save, .-_st_md_cxt_save
+    
+    .globl _st_md_cxt_restore
+        .type _st_md_cxt_restore, %function
+        .align 2
+    _st_md_cxt_restore:
+        mov     ip, r0 // r0 -> jmp_buf
+        movs    r0, r1 // r1 -> return value
+        // The bellow is a group, that is:
+        // if (r0 == 0) r0 =1;
+        ITT     eq  
+        moveq   r0, #1 // long_jmp should never return 0
+    
+        ldmia   ip!, {v1-v6, sl, fp} // restore registers.
+        ldr     sp, [ip], #4         // restore sp, like: sp=*ip; ip+=4;
+        ldr     lr, [ip], #4
+        bx      lr  
+    .size _st_md_cxt_restore, .-_st_md_cxt_restore
 
 #endif
 
