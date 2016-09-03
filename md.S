@@ -462,6 +462,39 @@
 #elif defined(__arm__)
 
     /* TODO: FIXME: implement setjmp and longjmp for ARM */
+    .globl _st_md_cxt_save
+        .type _st_md_cxt_save, %function
+        .align 2
+    _st_md_cxt_save:
+        mov     ip, r0 // r0为参数jmpbuf地址
+        // 以下指令等同于
+        // *ip++ = v1
+        // *ip++ = ...
+        // *ip++ = v6
+        // *ip++ = sl
+        // *ip++ = fp
+        stmia   ip!, {v1-v6, sl, fp} // TODO:根据不同的ARM版本,这里要做不同的寄存器保存 
+        movs    r2, sp
+        stmia   ip!, {r2, lr}
+        mov     r0, #0               // setjmp first return 0(r0存放返回值)
+        bx      lr                   // return
+     .size _st_md_cxt_save, .-_st_md_cxt_save
+    
+    .globl _st_md_cxt_restore
+        .type _st_md_cxt_restore, %function
+        .align 2
+    _st_md_cxt_restore:
+        mov     ip, r0 // r0 -> jmp_buf
+        movs    r0, r1 // r1 -> return value
+        // 下面两条指令是一组,也就是if(r0 == 0) r0 = 1
+        ITT     eq  
+        moveq   r0, #1 // 从long_jmp返回一定不能是0
+    
+        ldmia   ip!, {v1-v6, sl, fp} // 恢复寄存器
+        ldr     sp, [ip], #4         // ip会+4, 这条指令相当于sp = *ip; ip+=4;
+        ldr     lr, [ip], #4
+        bx      lr  
+    .size _st_md_cxt_restore, .-_st_md_cxt_restore
 
 #endif
 

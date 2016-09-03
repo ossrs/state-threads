@@ -421,12 +421,12 @@
         #elif defined(__arm__)
             #define MD_STACK_GROWS_DOWN
 
-            #if defined(__GLIBC__) && __GLIBC__ >= 2
-                /* Merge from https://github.com/michaeltalyansky/state-threads/commit/56554a5c425aee8e7a73782eae23d74d83c4120a */
-                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8]
-            #else
-                #error "ARM/Linux pre-glibc2 not supported yet"
-            #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */
+            #define MD_USE_BUILTIN_SETJMP
+            
+            #ifndef JB_RSP
+                #define JB_RSP 8 // 这里的JB_RSP的具体数值要跟md.S里面的保存位置对应
+            #endif
+            #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[JB_RSP]
 
         #elif defined(__s390__)
             #define MD_STACK_GROWS_DOWN
