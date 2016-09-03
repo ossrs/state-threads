@@ -422,7 +422,8 @@
             #define MD_STACK_GROWS_DOWN
 
             #if defined(__GLIBC__) && __GLIBC__ >= 2
-                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8] /*by SRS, 20=>8 for ARM*/
+                /* Merge from https://github.com/michaeltalyansky/state-threads/commit/56554a5c425aee8e7a73782eae23d74d83c4120a */
+                #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8]
             #else
                 #error "ARM/Linux pre-glibc2 not supported yet"
             #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */

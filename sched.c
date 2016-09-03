@@ -515,6 +515,15 @@ void st_thread_interrupt(_st_thread_t *thread)
 }
 
 
+/* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
+#if defined(__arm__)
+    extern unsigned long  __pointer_chk_guard;
+    #define PTR_MANGLE(var) \
+        (var) = (__typeof (var)) ((unsigned long) (var) ^ __pointer_chk_guard)
+    #define PTR_DEMANGLE(var)     PTR_MANGLE (var)
+#endif
+
+
 _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinable, int stk_size)
 {
     _st_thread_t *thread;
@@ -585,7 +594,15 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinabl
     thread->arg = arg;
     
 #ifndef __ia64__
-    _ST_INIT_CONTEXT(thread, stack->sp, _st_thread_main);
+    /* Merge from https://github.com/michaeltalyansky/state-threads/commit/cce736426c2320ffec7c9820df49ee7a18ae638c */
+    #if defined(__arm__)
+        volatile void * lsp = PTR_MANGLE(stack->sp);
+        if (_setjmp ((thread)->context))
+            _st_thread_main();
+        (thread)->context[0].__jmpbuf[8] = (long) (lsp);
+    #else
+        _ST_INIT_CONTEXT(thread, stack->sp, _st_thread_main);
+    #endif
 #else
     _ST_INIT_CONTEXT(thread, stack->sp, stack->bsp, _st_thread_main);
 #endif
