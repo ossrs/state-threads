@@ -461,7 +461,8 @@
 
 #elif defined(__arm__)
 
-    /* TODO: FIXME: implement setjmp and longjmp for ARM */
+    /****************************************************************/
+
     .globl _st_md_cxt_save
         .type _st_md_cxt_save, %function
         .align 2
@@ -479,6 +480,8 @@
         mov     r0, #0               // r0 save the return value(0) of setjmp.
         bx      lr                   // return
      .size _st_md_cxt_save, .-_st_md_cxt_save
+
+    /****************************************************************/
     
     .globl _st_md_cxt_restore
         .type _st_md_cxt_restore, %function
@@ -496,6 +499,8 @@
         ldr     lr, [ip], #4
         bx      lr  
     .size _st_md_cxt_restore, .-_st_md_cxt_restore
+
+    /****************************************************************/
 
 #endif
 
