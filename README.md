@@ -14,7 +14,7 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 - [x] Patch [st.disable.examples.patch](https://github.com/ossrs/srs/blob/2.0release/trunk/3rdparty/patches/4.st.disable.examples.patch), for ubuntu.
 - [x] [Refine TAB of code](https://github.com/ossrs/state-threads/compare/c2001d30ca58f55d72a6cc6b9b6c70391eaf14db...d2101b26988b0e0db0aabc53ddf452068c1e2cbc).
 - [x] Merge from [michaeltalyansky](https://github.com/michaeltalyansky/state-threads) and [xzh3836598](https://github.com/ossrs/state-threads/commit/9a17dec8f9c2814d93761665df7c5575a4d2d8a3), support [ARM](https://github.com/ossrs/state-threads/issues/1).
-- [ ] Merge from [toffaletti](https://github.com/toffaletti/state-threads), support [valgrind](https://github.com/ossrs/state-threads/issues/2) for ST.
+- [x] Merge from [toffaletti](https://github.com/toffaletti/state-threads), support [valgrind](https://github.com/ossrs/state-threads/issues/2) for ST.
 
 ## Usage
 
@@ -28,6 +28,21 @@ For osx:
 
 ```
 make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE"
+```
+
+Linux with valgrind:
+
+```
+make linux-debug EXTRA_CFLAGS="-DMD_VALGRIND -I/usr/local/include"
+```
+
+> Remark: User must install valgrind, for instance, in centos6 `sudo yum install -y valgrind valgrind-devel`.
+> Remark: User must define the macro `-DMD_VALGRIND` and the valgrind header files dir `-I/usr/local/include`.
+
+Linux with valgrind and epoll:
+
+```
+make linux-debug EXTRA_CFLAGS="-DMD_HAVE_EPOLL -DMD_VALGRIND -I/usr/local/include"
 ```
 
 Winlin 2016

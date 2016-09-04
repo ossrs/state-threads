@@ -47,6 +47,11 @@
 #include <errno.h>
 #include "common.h"
 
+/* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+#include <valgrind/valgrind.h>
+#endif
+
 
 /* Global data */
 _st_vp_t _st_this_vp;           /* This VP */
@@ -259,6 +264,13 @@ void st_thread_exit(void *retval)
     
 #ifdef DEBUG
     _ST_DEL_THREADQ(thread);
+#endif
+    
+    /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+    if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+        VALGRIND_STACK_DEREGISTER(thread->stack->valgrind_stack_id);
+    }
 #endif
     
     if (!(thread->flags & _ST_FL_PRIMORDIAL))
@@ -622,6 +634,13 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinabl
     _ST_ADD_RUNQ(thread);
 #ifdef DEBUG
     _ST_ADD_THREADQ(thread);
+#endif
+    
+    /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+    if (!(thread->flags & _ST_FL_PRIMORDIAL)) {
+        thread->stack->valgrind_stack_id = VALGRIND_STACK_REGISTER(thread->stack->stk_top, thread->stack->stk_bottom);
+    }
 #endif
     
     return thread;

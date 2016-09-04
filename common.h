@@ -67,6 +67,15 @@
 #include "public.h"
 #include "md.h"
 
+/* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef MD_VALGRIND
+    #ifndef NVALGRIND
+        #define NVALGRIND
+    #endif
+#else
+    #undef NVALGRIND
+#endif
+
 
 /*****************************************
  * Circular linked list definitions
@@ -148,6 +157,12 @@ typedef struct _st_stack {
     void *sp;                   /* Stack pointer from C's point of view */
 #ifdef __ia64__
     void *bsp;                  /* Register stack backing store pointer */
+#endif
+    /* merge from https://github.com/toffaletti/state-threads/commit/7f57fc9acc05e657bca1223f1e5b9b1a45ed929b */
+#ifndef NVALGRIND
+    /* id returned by VALGRIND_STACK_REGISTER */
+    /* http://valgrind.org/docs/manual/manual-core-adv.html */
+    unsigned long valgrind_stack_id;
 #endif
 } _st_stack_t;
 
