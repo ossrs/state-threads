@@ -50,4 +50,6 @@ For OSX, user must specifies the valgrind header files:
 make darwin-debug EXTRA_CFLAGS="-DMD_VALGRIND -I/usr/local/include"
 ```
 
+> Remark: How to debug with gdb under valgrind, read [valgrind manual](http://valgrind.org/docs/manual/manual-core-adv.html#manual-core-adv.gdbserver-simple).
+
 Winlin 2016
