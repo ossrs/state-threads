@@ -422,6 +422,11 @@
             #define MD_STACK_GROWS_DOWN
             #define MD_USE_BUILTIN_SETJMP
 
+            /* force to use glibc solution, hack the guard jmpbuf from michaeltalyansky */
+            #ifdef USE_LIBC_SETJMP
+                #undef MD_USE_BUILTIN_SETJMP
+            #endif
+
             #if defined(__GLIBC__) && __GLIBC__ >= 2
                 /* Merge from https://github.com/michaeltalyansky/state-threads/commit/56554a5c425aee8e7a73782eae23d74d83c4120a */
                 #define MD_GET_SP(_t) (_t)->context[0].__jmpbuf[8]
