@@ -16,6 +16,12 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 - [x] Merge from [michaeltalyansky](https://github.com/michaeltalyansky/state-threads) and [xzh3836598](https://github.com/ossrs/state-threads/commit/9a17dec8f9c2814d93761665df7c5575a4d2d8a3), support [ARM](https://github.com/ossrs/state-threads/issues/1).
 - [x] Merge from [toffaletti](https://github.com/toffaletti/state-threads), support [valgrind](https://github.com/ossrs/state-threads/issues/2) for ST.
 
+## Docs
+
+* Introduction: http://ossrs.github.io/state-threads/docs/st.html
+* API reference: http://ossrs.github.io/state-threads/docs/reference.html
+* Programming notes: http://ossrs.github.io/state-threads/docs/notes.html
+
 ## Usage
 
 For Linux:
