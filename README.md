@@ -53,7 +53,7 @@ make linux-debug EXTRA_CFLAGS="-DMD_HAVE_EPOLL -DMD_VALGRIND"
 For OSX, user must specifies the valgrind header files:
 
 ```
-make darwin-debug EXTRA_CFLAGS="-DMD_VALGRIND -I/usr/local/include"
+make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE -DMD_VALGRIND -I/usr/local/include"
 ```
 
 ## Valgrind
