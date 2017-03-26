@@ -5,6 +5,8 @@ Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https
 
 > See: https://github.com/ossrs/state-threads/blob/srs/README
 
+For original ST without any changes, checkout the [ST master branch](https://github.com/ossrs/state-threads/tree/master).
+
 ## Branch SRS
 
 The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patched the following patches:
