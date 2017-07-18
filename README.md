@@ -26,6 +26,13 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 
 ## Usage
 
+Get patch ST:
+
+```
+git clone https://github.com/ossrs/state-threads.git st-1.9 &&
+git checkout -b srs origin/srs
+```
+
 For Linux:
 
 ```
