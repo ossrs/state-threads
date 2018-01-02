@@ -83,6 +83,8 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
     pq.npds = npds;
     pq.thread = me;
     pq.on_ioq = 1;
+    if (*_st_eventsys->pollq_add && (*_st_eventsys->pollq_add)(&pq))
+        return -1;
     _ST_ADD_IOQ(pq);
     if (timeout != ST_UTIME_NO_TIMEOUT)
         _ST_ADD_SLEEPQ(me, timeout);
@@ -92,6 +94,8 @@ int st_poll(struct pollfd *pds, int npds, st_utime_t timeout)
     
     n = 0;
     if (pq.on_ioq) {
+        if (*_st_eventsys->pollq_del)
+            (*_st_eventsys->pollq_del)(&pq);
         /* If we timed out, the pollq might still be on the ioq. Remove it */
         _ST_DEL_IOQ(pq);
         (*_st_eventsys->pollset_del)(pds, npds);

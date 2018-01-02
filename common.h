@@ -228,6 +228,8 @@ typedef struct _st_eventsys_ops {
     int  (*fd_new)(int);                       /* New descriptor allocated */
     int  (*fd_close)(int);                     /* Descriptor closed */
     int  (*fd_getlimit)(void);                 /* Descriptor hard limit */
+    int  (*pollq_add)(_st_pollq_t *pq);
+    void (*pollq_del)(_st_pollq_t *pq);
 } _st_eventsys_t;
 
 

@@ -1,5 +1,4 @@
 state-threads
-=============
 
 Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https://github.com/ossrs/srs/tree/2.0release).
 
