@@ -1,3 +1,4 @@
-DARWIN_15.6.0_DBG
+DARWIN_*_DBG
+LINUX_*_DBG
 obj
 st.pc

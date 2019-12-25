@@ -139,8 +139,8 @@ CFLAGS      += -arch ppc
 LDFLAGS     += -arch ppc
 endif
 ifeq ($(INTEL), yes)
-CFLAGS      += -arch x86_64
-LDFLAGS     += -arch x86_64
+CFLAGS      += -arch i386 -arch x86_64
+LDFLAGS     += -arch i386 -arch x86_64
 endif
 LDFLAGS     += -dynamiclib -install_name /sw/lib/libst.$(MAJOR).$(DSO_SUFFIX) -compatibility_version $(MAJOR) -current_version $(VERSION)
 OTHER_FLAGS = -Wall

@@ -68,6 +68,8 @@ For OSX, user must specifies the valgrind header files:
 make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE -DMD_VALGRIND -I/usr/local/include"
 ```
 
+> Remark: Latest OSX does not support ST, please use docker to run ST.
+
 ## Valgrind
 
 How to debug with gdb under valgrind, read [valgrind manual](http://valgrind.org/docs/manual/manual-core-adv.html#manual-core-adv.gdbserver-simple).
