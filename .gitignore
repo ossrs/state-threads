@@ -2,3 +2,4 @@ DARWIN_*_DBG
 LINUX_*_DBG
 obj
 st.pc
+.idea
