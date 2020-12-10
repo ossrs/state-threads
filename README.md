@@ -68,6 +68,11 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 - [x] Support OSX for Apple Darwin, macOS, [#11](https://github.com/ossrs/state-threads/issues/11).
 - [x] Support sendmmsg for UDP, [#12](https://github.com/ossrs/state-threads/issues/12).
 
+## GDB Tools
+
+- [x] Support [nn_coroutines](https://github.com/ossrs/state-threads/issues/15#issuecomment-742218041), show number of coroutines.
+- [x] Support [show_coroutines](https://github.com/ossrs/state-threads/issues/15#issuecomment-742218612), show all coroutines and caller funciton.
+
 ## Valgrind
 
 How to debug with gdb under valgrind, read [valgrind manual](http://valgrind.org/docs/manual/manual-core-adv.html#manual-core-adv.gdbserver-simple).
