@@ -52,6 +52,22 @@
 #include <valgrind/valgrind.h>
 #endif
 
+// Global stat.
+#ifdef DEBUG
+unsigned long long _st_stat_sched_15ms = 0;
+unsigned long long _st_stat_sched_20ms = 0;
+unsigned long long _st_stat_sched_25ms = 0;
+unsigned long long _st_stat_sched_30ms = 0;
+unsigned long long _st_stat_sched_35ms = 0;
+unsigned long long _st_stat_sched_40ms = 0;
+unsigned long long _st_stat_sched_80ms = 0;
+unsigned long long _st_stat_sched_160ms = 0;
+unsigned long long _st_stat_sched_s = 0;
+
+unsigned long long _st_stat_thread_run = 0;
+unsigned long long _st_stat_thread_idle = 0;
+#endif
+
 
 /* Global data */
 _st_vp_t _st_this_vp;           /* This VP */
@@ -118,10 +134,18 @@ void _st_vp_schedule(void)
     _st_thread_t *thread;
     
     if (_ST_RUNQ.next != &_ST_RUNQ) {
+        #ifdef DEBUG
+        ++_st_stat_thread_run;
+        #endif
+
         /* Pull thread off of the run queue */
         thread = _ST_THREAD_PTR(_ST_RUNQ.next);
         _ST_DEL_RUNQ(thread);
     } else {
+        #ifdef DEBUG
+        ++_st_stat_thread_idle;
+        #endif
+
         /* If there are no threads to run, switch to the idle thread */
         thread = _st_this_vp.idle_thread;
     }
@@ -482,6 +506,28 @@ void _st_vp_check_clock(void)
     now = st_utime();
     elapsed = now < _ST_LAST_CLOCK? 0 : now - _ST_LAST_CLOCK; // Might step back.
     _ST_LAST_CLOCK = now;
+
+    #ifdef DEBUG
+    if (elapsed <= 10000) {
+        ++_st_stat_sched_15ms;
+    } else if (elapsed <= 21000) {
+        ++_st_stat_sched_20ms;
+    } else if (elapsed <= 25000) {
+        ++_st_stat_sched_25ms;
+    } else if (elapsed <= 30000) {
+        ++_st_stat_sched_30ms;
+    } else if (elapsed <= 35000) {
+        ++_st_stat_sched_35ms;
+    } else if (elapsed <= 40000) {
+        ++_st_stat_sched_40ms;
+    } else if (elapsed <= 80000) {
+        ++_st_stat_sched_80ms;
+    } else if (elapsed <= 160000) {
+        ++_st_stat_sched_160ms;
+    } else {
+        ++_st_stat_sched_s;
+    }
+    #endif
     
     if (_st_curr_time && now - _st_last_tset > 999000) {
         _st_curr_time = time(NULL);
