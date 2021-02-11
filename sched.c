@@ -548,7 +548,8 @@ void _st_vp_check_clock(void)
         /* Make thread runnable */
         ST_ASSERT(!(thread->flags & _ST_FL_IDLE_THREAD));
         thread->state = _ST_ST_RUNNABLE;
-        _ST_ADD_RUNQ(thread);
+        // Insert at the head of RunQ, to execute timer first.
+        _ST_INSERT_RUNQ(thread);
     }
 }
 
