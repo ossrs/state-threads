@@ -480,7 +480,7 @@ void _st_vp_check_clock(void)
     st_utime_t elapsed, now;
     
     now = st_utime();
-    elapsed = now - _ST_LAST_CLOCK;
+    elapsed = now < _ST_LAST_CLOCK? 0 : now - _ST_LAST_CLOCK; // Might step back.
     _ST_LAST_CLOCK = now;
     
     if (_st_curr_time && now - _st_last_tset > 999000) {
