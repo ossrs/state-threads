@@ -3,3 +3,10 @@ LINUX_*_DBG
 obj
 st.pc
 .idea
+
+gtest*
+googletest-*
+*.gcda
+*.gcno
+coverage
+codecov
