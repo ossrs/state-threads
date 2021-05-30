@@ -13,7 +13,7 @@ For original ST without any changes, checkout the [ST master branch](https://git
 
 ## LICENSE
 
-state-threads is licenced under [MPL or GPLv2](https://github.com/ossrs/srs/wiki/LicenseMixing#state-threads).
+[state-threads](https://github.com/ossrs/state-threads/blob/srs/README#L68) is licenced under [MPL or GPLv2](https://github.com/ossrs/srs/wiki/LicenseMixing#state-threads).
 
 ## Usage
 
