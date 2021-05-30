@@ -11,6 +11,10 @@ Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https
 
 For original ST without any changes, checkout the [ST master branch](https://github.com/ossrs/state-threads/tree/master).
 
+## LICENSE
+
+state-threads is licenced under [MPL or GPLv2](https://github.com/ossrs/srs/wiki/LicenseMixing#state-threads).
+
 ## Usage
 
 Get code:
