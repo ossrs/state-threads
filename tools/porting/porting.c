@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <setjmp.h>
 
+int foo_return_zero();
+int foo_return_one();
 extern void print_buf(unsigned char* p, int nn_jb);
 extern void print_jmpbuf();
 
@@ -37,10 +39,25 @@ int main(int argc, char** argv)
     printf("sizeof(__ptr_t)=%d\n", sizeof(__ptr_t));
 #endif
 
+    printf("\nReturn value:\n");
+    int r0 = foo_return_zero();
+    int r1 = foo_return_one();
+    printf("foo_return_zero=%d, foo_return_one=%d\n", r0, r1);
+
     printf("\nCalling conventions:\n");
     print_jmpbuf();
 
     return 0;
+}
+
+int foo_return_zero()
+{
+    return 0;
+}
+
+int foo_return_one()
+{
+    return 1;
 }
 
 #ifdef __linux__
@@ -48,6 +65,7 @@ int main(int argc, char** argv)
 void print_jmpbuf()
 {
     // https://en.wikipedia.org/wiki/MIPS_architecture#Calling_conventions
+    register void* ra asm("ra");
     register void* gp asm("gp");
     register void* sp asm("sp");
     register void* fp asm("fp");
@@ -60,8 +78,6 @@ void print_jmpbuf()
     register void* s5 asm("s5");
     register void* s6 asm("s6");
     register void* s7 asm("s7");
-    printf("gp=%p, fp=%p, sp=%p, s0=%p, s1=%p, s2=%p, s3=%p, s4=%p, s5=%p, s6=%p, s7=%p\n",
-        gp, fp, sp, s0, s1, s2, s3, s4, s5, s6, s7);
 
     /*
     typedef unsigned long long __jmp_buf[13];
@@ -72,7 +88,12 @@ void print_jmpbuf()
     } jmp_buf[1];
     */
     jmp_buf ctx = {0};
-    setjmp(ctx);
+    if (!setjmp(ctx)) {
+        longjmp(ctx, 1);
+    }
+
+    printf("ra=%p, sp=%p, s0=%p, s1=%p, s2=%p, s3=%p, s4=%p, s5=%p, s6=%p, s7=%p, fp=%p, gp=%p\n",
+        ra, sp, s0, s1, s2, s3, s4, s5, s6, s7, fp, gp);
 
     int nn_jb = sizeof(ctx[0].__jb);
     printf("sizeof(jmp_buf)=%d (unsigned long long [%d])\n", nn_jb, nn_jb/8);

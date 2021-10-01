@@ -3,8 +3,8 @@
 LDLIBS=../../obj/libst.a
 CFLAGS=-g -O0
 
-./verify:  verify.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Wall -o $@ $^ $(LDLIBS)
+./verify:  verify.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Wall -o verify verify.c $(LDLIBS)
 
 clean:
 	rm -f verify

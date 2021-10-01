@@ -21,6 +21,7 @@ int main(int argc, char** argv)
 void verify_jmpbuf()
 {
     // https://en.wikipedia.org/wiki/MIPS_architecture#Calling_conventions
+    register void* ra asm("ra");
     register void* gp asm("gp");
     register void* sp asm("sp");
     register void* fp asm("fp");
@@ -33,11 +34,15 @@ void verify_jmpbuf()
     register void* s5 asm("s5");
     register void* s6 asm("s6");
     register void* s7 asm("s7");
-    printf("gp=%p, fp=%p, sp=%p, s0=%p, s1=%p, s2=%p, s3=%p, s4=%p, s5=%p, s6=%p, s7=%p\n",
-        gp, fp, sp, s0, s1, s2, s3, s4, s5, s6, s7);
 
     jmp_buf ctx = {0};
-    _st_md_cxt_save(ctx);
+    int r0 = _st_md_cxt_save(ctx);
+    if (!r0) {
+        _st_md_cxt_restore(ctx, 1); // Restore/Jump to previous line, set r0 to 1.
+    }
+
+    printf("sp=%p, ra=%p, gp=%p, s0=%p, s1=%p, s2=%p, s3=%p, s4=%p, s5=%p, s6=%p, s7=%p, fp=%p\n",
+        sp, ra, gp, s0, s1, s2, s3, s4, s5, s6, s7, fp);
 
     int nn_jb = sizeof(ctx[0].__jb);
     unsigned char* p = (unsigned char*)ctx[0].__jb;

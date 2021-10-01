@@ -117,15 +117,7 @@
         (void) gettimeofday(&tv, NULL); \
         return (tv.tv_sec * 1000000LL + tv.tv_usec)
 
-    #if defined(__mips__)
-        #define MD_INIT_CONTEXT(_thread, _sp, _main)               \
-            ST_BEGIN_MACRO                                           \
-            MD_SETJMP((_thread)->context);                           \
-            _thread->context[0].__jmpbuf[0].__pc = (__ptr_t) _main;  \
-            _thread->context[0].__jmpbuf[0].__sp = _sp;              \
-            ST_END_MACRO
-
-    #else /* Not mips */
+    #if 1
 
         /*
          * On linux, there are a few styles of jmpbuf format.  These vary based
@@ -189,6 +181,11 @@
             #else
                 #error "ARM/Linux pre-glibc2 not supported yet"
             #endif /* defined(__GLIBC__) && __GLIBC__ >= 2 */
+
+        #elif defined(__mips__)
+            /* https://github.com/ossrs/state-threads/issues/21 */
+            #define MD_USE_BUILTIN_SETJMP
+            #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jb[0]))
 
         #else
             #error "Unknown CPU architecture"
