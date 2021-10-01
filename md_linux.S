@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MPL-1.1 OR GPL-2.0-or-later */
 
 /* If user disable the ASM, such as avoiding bugs in ASM, donot compile it. */
 #if !defined(MD_ST_NO_ASM)

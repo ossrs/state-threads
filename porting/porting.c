@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2021 Winlin */
+
 #include <stdio.h>
 #include <setjmp.h>
 
