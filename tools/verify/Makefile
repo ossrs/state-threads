@@ -1,8 +1,11 @@
 .PHONY: clean
 
-./porting:  porting.c
+LDLIBS=../../obj/libst.a
+CFLAGS=-g -O0
+
+./verify:  verify.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Wall -o $@ $^ $(LDLIBS)
 
 clean:
-	rm -f porting
+	rm -f verify
 

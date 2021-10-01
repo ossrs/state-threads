@@ -11,3 +11,4 @@ googletest-*
 *.gcno
 coverage
 codecov
+*.dSYM

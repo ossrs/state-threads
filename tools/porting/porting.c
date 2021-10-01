@@ -20,7 +20,7 @@ int main(int argc, char** argv)
     printf("\nCPU specs:\n");
 #ifdef __mips__
     // https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00565-2B-MIPS32-QRC-01.01.pdf
-    printf("__mips__: %d, __mips:%d, __mips_isa_rev:%d, _MIPSEL:%d\n", __mips__, __mips, __mips_isa_rev, _MIPSEL);
+    printf("__mips__: %d, __mips:%d, _MIPSEL:%d\n", __mips__, __mips, _MIPSEL);
 #endif
 #ifdef __x86_64__
     printf("__x86_64__: %d\n", __x86_64__);
@@ -48,20 +48,20 @@ int main(int argc, char** argv)
 void print_jmpbuf()
 {
     // https://en.wikipedia.org/wiki/MIPS_architecture#Calling_conventions
-    register long int gp asm("gp");
-    register long int sp asm("sp");
-    register long int fp asm("fp");
+    register void* gp asm("gp");
+    register void* sp asm("sp");
+    register void* fp asm("fp");
     // $s0–$s7	$16–$23	saved temporaries
-    register long int s0 asm("s0");
-    register long int s1 asm("s1");
-    register long int s2 asm("s2");
-    register long int s3 asm("s3");
-    register long int s4 asm("s4");
-    register long int s5 asm("s5");
-    register long int s6 asm("s6");
-    register long int s7 asm("s7");
+    register void* s0 asm("s0");
+    register void* s1 asm("s1");
+    register void* s2 asm("s2");
+    register void* s3 asm("s3");
+    register void* s4 asm("s4");
+    register void* s5 asm("s5");
+    register void* s6 asm("s6");
+    register void* s7 asm("s7");
     printf("gp=%p, fp=%p, sp=%p, s0=%p, s1=%p, s2=%p, s3=%p, s4=%p, s5=%p, s6=%p, s7=%p\n",
-        (void*)gp, (void*)fp, (void*)sp, (void*)s0, (void*)s1, (void*)s2, (void*)s3, (void*)s4, (void*)s5, (void*)s6, (void*)s7);
+        gp, fp, sp, s0, s1, s2, s3, s4, s5, s6, s7);
 
     /*
     typedef unsigned long long __jmp_buf[13];
@@ -88,15 +88,17 @@ void print_jmpbuf()
 void print_jmpbuf()
 {
     // https://courses.cs.washington.edu/courses/cse378/10au/sections/Section1_recap.pdf
-    register long int rsp asm("rsp");
-    register long int rbx asm("rbx");
-    register long int rbp asm("rbp");
-    register long int r12 asm("r12");
-    register long int r13 asm("r13");
-    register long int r14 asm("r14");
-    register long int r15 asm("r15");
-    printf("rsp=%p, rbx=%p, rbp=%p, r12=%p, r13=%p, r14=%p, r15=%p\n",
-        (void*)rbx, (void*)rbp, (void*)r12, (void*)r13, (void*)r14, (void*)r15);
+    void *rbx, *rbp, *r12, *r13, *r14, *r15, *rsp;
+    __asm__ __volatile__ ("movq %%rbx,%0": "=r"(rbx): /* No input */);
+    __asm__ __volatile__ ("movq %%rbp,%0": "=r"(rbp): /* No input */);
+    __asm__ __volatile__ ("movq %%r12,%0": "=r"(r12): /* No input */);
+    __asm__ __volatile__ ("movq %%r13,%0": "=r"(r13): /* No input */);
+    __asm__ __volatile__ ("movq %%r14,%0": "=r"(r14): /* No input */);
+    __asm__ __volatile__ ("movq %%r15,%0": "=r"(r15): /* No input */);
+    __asm__ __volatile__ ("movq %%rsp,%0": "=r"(rsp): /* No input */);
+
+    printf("rbx=%p, rbp=%p,%p, r12=%p, r13=%p, r14=%p, r15=%p, rsp=%p\n",
+        rbx, rbp, rbp2, r12, r13, r14, r15, rsp);
 
     jmp_buf ctx = {0};
     setjmp(ctx);
