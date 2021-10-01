@@ -7,11 +7,6 @@
 
 int main(int argc, char** argv)
 {
-#if defined(__linux__) || defined(__APPLE__)
-    st_set_eventsys(ST_EVENTSYS_ALT);
-#else
-    st_set_eventsys(ST_EVENTSYS_SELECT);
-#endif
     st_init();
 
     for (int i = 0; i < 10000; i++) {

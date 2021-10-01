@@ -104,7 +104,7 @@ CFLAGS      += -arch x86_64
 LDFLAGS     += -arch x86_64
 LDFLAGS     += -dynamiclib -install_name /sw/lib/libst.$(MAJOR).$(DSO_SUFFIX) -compatibility_version $(MAJOR) -current_version $(VERSION)
 OTHER_FLAGS = -Wall
-DEFINES     += -DMD_HAVE_KQUEUE
+DEFINES     += -DMD_HAVE_KQUEUE -DMD_HAVE_SELECT
 endif
 
 ifeq ($(OS), LINUX)
@@ -112,7 +112,7 @@ EXTRA_OBJS  = $(TARGETDIR)/md_linux.o
 SFLAGS      = -fPIC
 LDFLAGS     = -shared -soname=$(SONAME) -lc
 OTHER_FLAGS = -Wall
-DEFINES     += -DMD_HAVE_EPOLL
+DEFINES     += -DMD_HAVE_EPOLL -DMD_HAVE_SELECT
 endif
 
 ifeq ($(OS), CYGWIN64)

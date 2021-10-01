@@ -1198,7 +1198,7 @@ int st_set_eventsys(int eventsys)
         return -1;
     }
 
-    if (eventsys == ST_EVENTSYS_SELECT) {
+    if (eventsys == ST_EVENTSYS_SELECT || eventsys == ST_EVENTSYS_DEFAULT) {
 #if defined (MD_HAVE_SELECT)
         _st_eventsys = &_st_select_eventsys;
         return 0;
