@@ -88,7 +88,8 @@ void print_jmpbuf()
     } jmp_buf[1];
     */
     jmp_buf ctx = {0};
-    if (!setjmp(ctx)) {
+    int r0 = setjmp(ctx);
+    if (!r0) {
         longjmp(ctx, 1);
     }
 
@@ -118,11 +119,14 @@ void print_jmpbuf()
     __asm__ __volatile__ ("movq %%r15,%0": "=r"(r15): /* No input */);
     __asm__ __volatile__ ("movq %%rsp,%0": "=r"(rsp): /* No input */);
 
-    printf("rbx=%p, rbp=%p,%p, r12=%p, r13=%p, r14=%p, r15=%p, rsp=%p\n",
-        rbx, rbp, rbp2, r12, r13, r14, r15, rsp);
+    printf("rbx=%p, rbp=%p, r12=%p, r13=%p, r14=%p, r15=%p, rsp=%p\n",
+        rbx, rbp, r12, r13, r14, r15, rsp);
 
     jmp_buf ctx = {0};
-    setjmp(ctx);
+    int r0 = setjmp(ctx);
+    if (!r0) {
+        longjmp(ctx, 1);
+    }
 
     int nn_jb = sizeof(ctx);
     printf("sizeof(jmp_buf)=%d (unsigned long long [%d])\n", nn_jb, nn_jb/8);

@@ -65,11 +65,14 @@ void verify_jmpbuf()
     __asm__ __volatile__ ("movq %%r15,%0": "=r"(r15): /* No input */);
     __asm__ __volatile__ ("movq %%rsp,%0": "=r"(rsp): /* No input */);
 
-    printf("rbx=%p, rbp=%p,%p, r12=%p, r13=%p, r14=%p, r15=%p, rsp=%p\n",
-        rbx, rbp, rbp2, r12, r13, r14, r15, rsp);
+    printf("rbx=%p, rbp=%p, r12=%p, r13=%p, r14=%p, r15=%p, rsp=%p\n",
+        rbx, rbp, r12, r13, r14, r15, rsp);
 
     jmp_buf ctx = {0};
-    _st_md_cxt_save(ctx);
+    int r0 = _st_md_cxt_save(ctx);
+    if (!r0) {
+        _st_md_cxt_restore(ctx, 1); // Restore/Jump to previous line, set r0 to 1.
+    }
 
     int nn_jb = sizeof(ctx);
     printf("sizeof(jmp_buf)=%d (unsigned long long [%d])\n", nn_jb, nn_jb/8);
