@@ -19,26 +19,32 @@ For original ST without any changes, checkout the [ST master branch](https://git
 
 Get code:
 
-```
+```bash
 git clone https://github.com/ossrs/state-threads.git &&
 cd state-threads && git checkout srs
 ```
 
 For Linux:
 
-```
+```bash
 make linux-debug EXTRA_CFLAGS="-DMD_HAVE_EPOLL"
 ```
 
 For OSX:
 
-```
+```bash
 make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE"
+```
+
+For Linux aarch64, which fail with `Unknown CPU architecture`:
+
+```bash
+make linux-debug EXTRA_CFLAGS="-D__aarch64__"
 ```
 
 Linux with valgrind:
 
-```
+```bash
 make linux-debug EXTRA_CFLAGS="-DMD_VALGRIND"
 ```
 
@@ -46,13 +52,13 @@ make linux-debug EXTRA_CFLAGS="-DMD_VALGRIND"
 
 Linux with valgrind and epoll:
 
-```
+```bash
 make linux-debug EXTRA_CFLAGS="-DMD_HAVE_EPOLL -DMD_VALGRIND"
 ```
 
 For OSX, user must specifies the valgrind header files:
 
-```
+```bash
 make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE -DMD_VALGRIND -I/usr/local/include"
 ```
 
@@ -146,6 +152,7 @@ bash auto/coverage.sh
 * API reference: http://ossrs.github.io/state-threads/docs/reference.html
 * Programming notes: http://ossrs.github.io/state-threads/docs/notes.html
 
+* [How to porting ST to other OS/CPU?](https://github.com/ossrs/state-threads/issues/22)
 * About setjmp and longjmp, read [setjmp](https://gitee.com/winlinvip/srs-wiki/raw/master/images/st-setjmp.jpg).
 * About the stack structure, read [stack](https://gitee.com/winlinvip/srs-wiki/raw/master/images/st-stack.jpg)
 * About asm code comments, read [#91d530e](https://github.com/ossrs/state-threads/commit/91d530e#diff-ed9428b14ff6afda0e9ab04cc91d4445R25).
