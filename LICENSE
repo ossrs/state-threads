@@ -7,6 +7,11 @@ Individual files contain the following tag instead of the full license text.
 
 	SPDX-License-Identifier: MPL-1.1 OR GPL-2.0-or-later
 
+Some ASM codes for new porting OS/CPU, "utest" and "porting" directory is
+distributed under the MIT style license.
+
+    SPDX-License-Identifier: MIT
+
 This enables machine processing of license information based on the SPDX
 License Identifiers that are here available: http://spdx.org/licenses/
 
