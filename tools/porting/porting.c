@@ -153,6 +153,46 @@ void print_jmpbuf()
     unsigned char* p = (unsigned char*)ctx[0].__jmpbuf;
     print_buf(p, nn_jb);
 }
+#elif defined( __riscv )
+void print_jmpbuf()
+{
+	void  *ra, *s0, *s1, *s2, *s3, *s4, *s5;
+	void  *s6, *s7, *s8, *s9, *s10, *s11, *sp;
+	
+    __asm__ __volatile__ ("mv %0,ra": "=r"(ra): /* No input */);
+	__asm__ __volatile__ ("mv %0,s0": "=r"(s0): /* No input */);
+	__asm__ __volatile__ ("mv %0,s1": "=r"(s1): /* No input */);
+	__asm__ __volatile__ ("mv %0,s2": "=r"(s2): /* No input */);
+	__asm__ __volatile__ ("mv %0,s3": "=r"(s3): /* No input */);
+	__asm__ __volatile__ ("mv %0,s4": "=r"(s4): /* No input */);
+	__asm__ __volatile__ ("mv %0,s5": "=r"(s5): /* No input */);
+	__asm__ __volatile__ ("mv %0,s6": "=r"(s6): /* No input */);
+	__asm__ __volatile__ ("mv %0,s7": "=r"(s7): /* No input */);
+	__asm__ __volatile__ ("mv %0,s8": "=r"(s8): /* No input */);
+	__asm__ __volatile__ ("mv %0,s9": "=r"(s9): /* No input */);
+	__asm__ __volatile__ ("mv %0,s10": "=r"(s10): /* No input */);
+	__asm__ __volatile__ ("mv %0,s11": "=r"(s11): /* No input */);
+	__asm__ __volatile__ ("mv %0,sp": "=r"(sp): /* No input */);                                       
+	printf("ra=%p, s0=%p\n", ra, s0);
+	printf("s1=%p, s2=%p\n", s1, s2);
+	printf("s3=%p, s4=%p\n", s3, s4);
+	printf("s5=%p, s6=%p\n", s5, s6);
+	printf("s7=%p, s8=%p\n", s7, s8);
+	printf("s9=%p, s10=%p\n", s9, s10);
+	printf("s11=%p, sp=%p\n", s11, sp);
+
+    jmp_buf ctx = {0};
+    int r0 = setjmp(ctx);
+    if (!r0) {
+        longjmp(ctx, 1);
+    }
+
+    int nn_jb = sizeof(ctx);
+    printf("sizeof(jmp_buf)=%d (unsigned long long [%d])\n", nn_jb, nn_jb/8);
+
+    unsigned char* p = (unsigned char*)ctx;
+    print_buf(p, nn_jb); 
+}
 #endif
 #endif
 

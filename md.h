@@ -191,8 +191,17 @@
             /* https://github.com/ossrs/state-threads/issues/24 */
             #define MD_USE_BUILTIN_SETJMP
             #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
-
-        #else
+		
+		#elif defined(__riscv)
+			#if defined(__GLIBC__)   && __GLIBC__ >= 2
+				#undef MD_USE_BUILTIN_SETJMP
+			#else
+				#define MD_USE_BUILTIN_SETJMP
+				#error "RISCV/Linux pre-glibc2 not supported yet"
+			#endif
+			#define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0].__sp))
+			
+		#else
             #error "Unknown CPU architecture"
         #endif /* Cases with common MD_INIT_CONTEXT and different SP locations */
 
