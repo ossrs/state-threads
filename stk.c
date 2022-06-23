@@ -52,9 +52,9 @@
 /* How much space to leave between the stacks, at each end */
 #define REDZONE	_ST_PAGE_SIZE
 
-_st_clist_t _st_free_stacks = ST_INIT_STATIC_CLIST(&_st_free_stacks);
-int _st_num_free_stacks = 0;
-int _st_randomize_stacks = 0;
+__thread _st_clist_t _st_free_stacks;
+__thread int _st_num_free_stacks = 0;
+__thread int _st_randomize_stacks = 0;
 
 static char *_st_new_stk_segment(int size);
 
@@ -89,8 +89,9 @@ _st_stack_t *_st_stack_new(int stack_size)
     ts->stk_size = stack_size;
     ts->stk_bottom = ts->vaddr + REDZONE;
     ts->stk_top = ts->stk_bottom + stack_size;
-    
-#ifdef DEBUG
+
+    /* For example, in OpenWRT, the memory at the begin minus 16B by mprotect is read-only. */
+#if defined(DEBUG) && !defined(MD_NO_PROTECT)
     mprotect(ts->vaddr, REDZONE, PROT_NONE);
     mprotect(ts->stk_top + extra, REDZONE, PROT_NONE);
 #endif

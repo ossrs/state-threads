@@ -90,7 +90,7 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 - [x] Windows: Support Windows 64bits. [#20](https://github.com/ossrs/state-threads/issues/20).
 - [x] MIPS: Support Linux/MIPS for OpenWRT, [#21](https://github.com/ossrs/state-threads/issues/21).
 - [x] LOONGARCH: Support loongarch for loongson CPU, [#24](https://github.com/ossrs/state-threads/issues/24). 
-- [ ] System: Support Multiple Threads for Linux and Darwin. [#19](https://github.com/ossrs/state-threads/issues/19), [srs#2188](https://github.com/ossrs/srs/issues/2188).
+- [x] System: Support Multiple Threads for Linux and Darwin. [#19](https://github.com/ossrs/state-threads/issues/19), [srs#2188](https://github.com/ossrs/srs/issues/2188).
 - [ ] System: Support sendmmsg for UDP, [#12](https://github.com/ossrs/state-threads/issues/12).
 
 ## GDB Tools
