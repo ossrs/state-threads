@@ -12,3 +12,13 @@ googletest-*
 coverage
 codecov
 *.dSYM
+
+srs
+cmake-build-debug
+/ide/st_clion/CMakeCache.txt
+/ide/st_clion/CMakeFiles
+/ide/st_clion/Makefile
+/ide/st_clion/cmake_install.cmake
+/ide/st_clion/st
+/ide/st_clion/Testing/
+

@@ -1,0 +1,55 @@
+name: "Test"
+
+# @see https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#onpushpull_requestbranchestags
+on: [push, pull_request]
+
+jobs:
+  utest:
+    name: actions-test-utest
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      ################################################################
+      # Tests
+      - name: Build test image
+        run: docker build --tag st:test -f Dockerfile.test .
+      # For utest
+      - name: Run ST utest
+        run: docker run --rm st:test bash -c 'make linux-debug-utest && ./obj/st_utest'
+
+  coverage:
+    name: actions-test-coverage
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      ################################################################
+      # Tests
+      - name: Build coverage image
+        run: docker build --tag st:cov -f Dockerfile.cov .
+      # For coverage
+      - name: Run ST covergae
+        if: ${{ startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/pull/') }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          # The hash of commit.
+          ST_SHA=${{ github.sha }}
+          # Note that the root of ST, must contains .git, for report fixing.
+          ST_PROJECT=/st
+          # The github.ref is, for example, refs/heads/4.0release
+          ST_BRANCH=$(echo ${{ github.ref }}| awk -F 'refs/heads/' '{print $2}'| awk -F '/' '{print $1}')
+          # The github.ref is, for example, refs/pull/2536/merge
+          ST_PR=$(echo ${{ github.ref }}| awk -F 'refs/pull/' '{print $2}'| awk -F '/' '{print $1}')
+          echo "For ref=${{ github.ref }}, sha=${{ github.sha }}, ST_BRANCH=$ST_BRANCH, ST_PR=$ST_PR, ST_SHA=$ST_SHA, ST_PROJECT=$ST_PROJECT"
+          docker run --rm --env CODECOV_TOKEN=$CODECOV_TOKEN \
+            --env ST_BRANCH=$ST_BRANCH --env ST_PR=$ST_PR --env ST_SHA=$ST_SHA --env ST_PROJECT=$ST_PROJECT \
+            st:cov bash -c 'make linux-debug-gcov && ./obj/st_utest && bash auto/codecov.sh'
+
+
+

@@ -4,7 +4,7 @@ ST_DIR = ..
 # The main dir of st utest.
 ST_UTEST = .
 # The main dir of gtest.
-GTEST_DIR = $(ST_UTEST)/gtest
+GTEST_DIR = $(ST_UTEST)/gtest-fit/googletest
 
 # Flags passed to the C++ compiler.
 CXXFLAGS +=  -g -O0 -std=c++11
