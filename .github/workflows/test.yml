@@ -32,7 +32,7 @@ jobs:
       # Tests
       - name: Build coverage image
         run: docker build --tag st:cov -f Dockerfile.cov .
-      # For coverage
+      # For coverage, only allow push to branch(refs/heads/4.0release) or pull requests(refs/pull/2536/merge).
       - name: Run ST covergae
         if: ${{ startsWith(github.ref, 'refs/heads/') || startsWith(github.ref, 'refs/pull/') }}
         env:
@@ -46,7 +46,9 @@ jobs:
           ST_BRANCH=$(echo ${{ github.ref }}| awk -F 'refs/heads/' '{print $2}'| awk -F '/' '{print $1}')
           # The github.ref is, for example, refs/pull/2536/merge
           ST_PR=$(echo ${{ github.ref }}| awk -F 'refs/pull/' '{print $2}'| awk -F '/' '{print $1}')
-          echo "For ref=${{ github.ref }}, sha=${{ github.sha }}, ST_BRANCH=$ST_BRANCH, ST_PR=$ST_PR, ST_SHA=$ST_SHA, ST_PROJECT=$ST_PROJECT"
+          #
+          echo "For github.ref=${{ github.ref }}, github.sha=${{ github.sha }}"
+          echo "ST_BRANCH=$ST_BRANCH, ST_PR=$ST_PR, ST_SHA=$ST_SHA, ST_PROJECT=$ST_PROJECT"
           docker run --rm --env CODECOV_TOKEN=$CODECOV_TOKEN \
             --env ST_BRANCH=$ST_BRANCH --env ST_PR=$ST_PR --env ST_SHA=$ST_SHA --env ST_PROJECT=$ST_PROJECT \
             st:cov bash -c 'make linux-debug-gcov && ./obj/st_utest && bash auto/codecov.sh'
