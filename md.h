@@ -187,7 +187,7 @@
             #define MD_USE_BUILTIN_SETJMP
             #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jb[0]))
         #elif defined(__riscv)
-            /* https://github.com/ossrs/state-threads/issues/21 */
+            /* https://github.com/ossrs/state-threads/pull/28 */
             #define MD_USE_BUILTIN_SETJMP
             #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
 
