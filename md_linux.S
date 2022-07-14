@@ -357,46 +357,48 @@
     /****************************************************************/
     /*
      * Internal __jmp_buf layout
+     * riscv-asm: https://github.com/riscv/riscv-asm-manual/blob/master/riscv-asm.md
      */
-    #define JB_SP  12    /* R3, SP, Stack pointer */
-    #define JB_RA  11   /* R1, RA, Return address */
-    #define JB_FP  10    /* FP/R22 Frame pointer */
-    #define JB_S0  9    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S2  8    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S3  7    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S4  6    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S5  5    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S6  4    /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S7  3   /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S8  2   /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S9  1   /* R23-R31, S0-S8, Subroutine register variable */
-    #define JB_S10 0   /* R23-R31, S0-S8, Subroutine register variable */
+    #define JB_SP  0    /* A0, SP, Stack pointer */
+    #define JB_RA  1    /* RA, Return address */
+    #define JB_FP  2    /* FP/S0 Frame pointer */
+    #define JB_S1  3    /* S1 Saved register*/
+    #define JB_S2  4    /* S2-S11,  Saved register */
+    #define JB_S3  5    /* S2-S11,  Saved register */
+    #define JB_S4  6    /* S2-S11,  Saved register */
+    #define JB_S5  7    /* S2-S11,  Saved register */
+    #define JB_S6  8    /* S2-S11,  Saved register */
+    #define JB_S7  9    /* S2-S11,  Saved register */
+    #define JB_S8  0    /* S2-S11,  Saved register */
+    #define JB_S9  11   /* S2-S11,  Saved register */
+    #define JB_S10 12   /* S2-S11,  Saved register */
+    #define JB_S11 13   /* S2-S11,  Saved register */
 
 
     	.file "md_linux.S"
     	.text
 
-    	/* _st_md_cxt_save(__jmp_buf env) */ /* The env is $a0, https://en.wikipedia.org/wiki/MIPS_architecture#Calling_conventions */
+    	/* _st_md_cxt_save(__jmp_buf env) */ /* The env is $a0, https://en.wikipedia.org/wiki/RISC-V#Register_sets */
     	.globl _st_md_cxt_save
     	.type _st_md_cxt_save, %function
     	.align 2
     _st_md_cxt_save:
-	sd    sp,0(a0)
-	sd    ra,8(a0)
-	sd    s0,16(a0)
-	sd    s1,24(a0)
-	sd    s2,32(a0)
-	sd    s3,40(a0)
-	sd    s4,48(a0)
-	sd    s5,56(a0)
-	sd    s6,64(a0)
-	sd    s7,72(a0)
-	sd    s8,80(a0)
-	sd    s9,88(a0)
-	sd    s10,96(a0)
-	sd    s11,104(a0)
-	li    a0,0
-	jr ra
+	sd    sp,  JB_SP  * 8(a0)
+	sd    ra,  JB_RA  * 8(a0)
+	sd    s0,  JB_FP  * 8(a0)
+	sd    s1,  JB_S1  * 8(a0)
+	sd    s2,  JB_S2  * 8(a0)
+	sd    s3,  JB_S3  * 8(a0)
+	sd    s4,  JB_S4  * 8(a0)
+	sd    s5,  JB_S5  * 8(a0)
+	sd    s6,  JB_S6  * 8(a0)
+	sd    s7,  JB_S7  * 8(a0)
+	sd    s8,  JB_S8  * 8(a0)
+	sd    s9,  JB_S9  * 8(a0)
+	sd    s10, JB_S10 * 8(a0)
+	sd    s11, JB_S11 * 8(a0)
+	li    a0,  0
+	jr    ra
     	.size _st_md_cxt_save, .-_st_md_cxt_save
 
     /****************************************************************/
@@ -406,22 +408,22 @@
     	.type _st_md_cxt_restore, %function
     	.align 2
     _st_md_cxt_restore:
-	ld        sp,0(a0)
-	ld        ra,8(a0)
-	ld        s0,16(a0)
-	ld        s1,24(a0)
-	ld        s2,32(a0)
-	ld        s3,40(a0)
-	ld        s4,48(a0)
-	ld        s5,56(a0)
-	ld        s6,64(a0)
-	ld        s7,72(a0)
-	ld        s8,80(a0)
-	ld        s9,88(a0)
-	ld        s10,96(a0)
-	ld        s11,104(a0)
-	li a0,1
-	jr ra
+	ld        sp,  JB_SP  * 8(a0)
+	ld        ra,  JB_RA  * 8(a0)
+	ld        s0,  JB_FP  * 8(a0)
+	ld        s1,  JB_S1  * 8(a0)
+	ld        s2,  JB_S2  * 8(a0)
+	ld        s3,  JB_S3  * 8(a0)
+	ld        s4,  JB_S4  * 8(a0)
+	ld        s5,  JB_S5  * 8(a0)
+	ld        s6,  JB_S6  * 8(a0)
+	ld        s7,  JB_S7  * 8(a0)
+	ld        s8,  JB_S8  * 8(a0)
+	ld        s9,  JB_S9  * 8(a0)
+	ld        s10, JB_S10 * 8(a0)
+	ld        s11, JB_S11 * 8(a0)
+	li        a0,  1
+	jr        ra
     	.size _st_md_cxt_restore, .-_st_md_cxt_restore
 
     /****************************************************************/
