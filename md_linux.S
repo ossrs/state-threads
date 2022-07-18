@@ -369,7 +369,7 @@
     #define JB_S5  7    /* S2-S11,  Saved register */
     #define JB_S6  8    /* S2-S11,  Saved register */
     #define JB_S7  9    /* S2-S11,  Saved register */
-    #define JB_S8  0    /* S2-S11,  Saved register */
+    #define JB_S8  10    /* S2-S11,  Saved register */
     #define JB_S9  11   /* S2-S11,  Saved register */
     #define JB_S10 12   /* S2-S11,  Saved register */
     #define JB_S11 13   /* S2-S11,  Saved register */
