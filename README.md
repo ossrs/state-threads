@@ -109,6 +109,7 @@ The branch [srs](https://github.com/ossrs/state-threads/tree/srs) will be patche
 - [x] MIPS: Support Linux/MIPS for OpenWRT, [#21](https://github.com/ossrs/state-threads/issues/21).
 - [x] LOONGARCH: Support loongarch for loongson CPU, [#24](https://github.com/ossrs/state-threads/issues/24). 
 - [x] System: Support Multiple Threads for Linux and Darwin. [#19](https://github.com/ossrs/state-threads/issues/19), [srs#2188](https://github.com/ossrs/srs/issues/2188).
+- [x] RISCV: Support RISCV for RISCV CPU, [#24](https://github.com/ossrs/state-threads/pull/28).
 - [ ] IDE: Support CLion for debugging and learning.
 - [ ] System: Support sendmmsg for UDP, [#12](https://github.com/ossrs/state-threads/issues/12).
 
