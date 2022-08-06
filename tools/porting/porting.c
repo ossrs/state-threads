@@ -28,8 +28,8 @@ int main(int argc, char** argv)
 #ifdef __x86_64__
     printf("__x86_64__: %d\n", __x86_64__);
 #endif
-#ifdef __loongarch__
-    printf("__loongarch__: %d, __loongarch64 :%d\n", __loongarch__, __loongarch64);
+#ifdef __loongarch64
+    printf("__loongarch64 :%d\n", __loongarch64);
 #endif
 #ifdef __riscv
     printf("__riscv: %d\n", __riscv);
@@ -127,7 +127,7 @@ void print_jmpbuf()
     unsigned char* p = (unsigned char*)ctx[0].__jb;
     print_buf(p, nn_jb);
 }
-#elif __loongarch__
+#elif __loongarch64
 void print_jmpbuf()
 {
     // https://github.com/ossrs/state-threads/issues/24#porting
