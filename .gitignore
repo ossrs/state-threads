@@ -21,4 +21,5 @@ cmake-build-debug
 /ide/st_clion/cmake_install.cmake
 /ide/st_clion/st
 /ide/st_clion/Testing/
+.DS_Store
 

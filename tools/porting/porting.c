@@ -31,6 +31,15 @@ int main(int argc, char** argv)
 #ifdef __loongarch__
     printf("__loongarch__: %d, __loongarch64 :%d\n", __loongarch__, __loongarch64);
 #endif
+#ifdef __riscv
+    printf("__riscv: %d\n", __riscv);
+#endif
+#ifdef __arm__
+    printf("__arm__: %d\n", __arm__);
+#endif
+#ifdef __aarch64__
+    printf("__aarch64__: %d\n", __aarch64__);
+#endif
 
     printf("\nCompiler specs:\n");
 #ifdef __GLIBC__
@@ -71,6 +80,12 @@ int foo_return_one_arg1(int r0)
 }
 
 #ifdef __linux__
+
+#if defined(__riscv) || defined(__arm__) || defined(__aarch64__)
+void print_jmpbuf() {
+}
+#endif
+
 #ifdef __mips__
 void print_jmpbuf()
 {
