@@ -1,15 +1,24 @@
-.PHONY: default clean pre
+.PHONY: default clean
 
 CFLAGS=-g -O0
 
-default: ./jmpbuf pre
+OS_NAME 	= $(shell uname -s)
+ST_TARGET 	= linux-debug
+ifeq ($(OS_NAME), Darwin)
+ST_TARGET	= darwin-debug
+CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
+CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+CFLAGS      += -arch $(CPU_ARCHS)
+endif
+
+default: ./jmpbuf ./jmpbuf.E.c
 
 ./jmpbuf:  jmpbuf.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Wall -o $@ $^ $(LDLIBS)
 
-pre:  jmpbuf.c
+./jmpbuf.E.c: jmpbuf.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Wall -E -o jmpbuf.E.c $^ $(LDLIBS)
 
 clean:
-	rm -f jmpbuf jmpbuf.E.c
+	rm -rf jmpbuf jmpbuf.E.c jmpbuf.dSYM
 
