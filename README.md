@@ -1,4 +1,4 @@
-# state-threads
+state-threads
 
 ![](http://ossrs.net:8000/gif/v1/sls.gif?site=github.com&path=/srs/srsst)
 [![](https://github.com/ossrs/state-threads/actions/workflows/test.yml/badge.svg?branch=srs)](https://github.com/ossrs/state-threads/actions?query=workflow%3ATest+branch%3Asrs)
@@ -7,69 +7,67 @@
 
 Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https://github.com/ossrs/srs/tree/2.0release).
 
-> See: https://github.com/ossrs/state-threads/blob/srs/README
+See: https://github.com/ossrs/state-threads/blob/srs/README
 
 For original ST without any changes, checkout the [ST master branch](https://github.com/ossrs/state-threads/tree/master).
 
-## LICENSE
+LICENSE
 
 [state-threads](https://github.com/ossrs/state-threads/blob/srs/README#L68) is licenced under [MPL or GPLv2](https://ossrs.net/lts/zh-cn/license#state-threads).
 
-## Linux: Usage
+Linux: Usage
 
 Get code:
 
-```bash
+bash
 git clone -b srs https://github.com/ossrs/state-threads.git
-```
 
 For Linux:
 
-```bash
+bash
 make linux-debug
-```
+
 
 For Linux aarch64, which fail with `Unknown CPU architecture`:
 
-```bash
+bash
 make linux-debug EXTRA_CFLAGS="-D__aarch64__"
-```
 
-> Note: For more CPU architectures, please see [#22](https://github.com/ossrs/state-threads/issues/22)
+
+Note: For more CPU architectures, please see [#22](https://github.com/ossrs/state-threads/issues/22)
 
 Linux with valgrind:
 
-```bash
+bash
 make linux-debug EXTRA_CFLAGS="-DMD_VALGRIND"
-```
 
-> Remark: User must install valgrind, for instance, in centos6 `sudo yum install -y valgrind valgrind-devel`.
+Remark: User must install valgrind, for instance, in centos6 `sudo yum install -y valgrind valgrind-devel`.
 
 Linux with valgrind and epoll:
 
-```bash
+bash
 make linux-debug EXTRA_CFLAGS="-DMD_HAVE_EPOLL -DMD_VALGRIND"
-```
 
-## Mac: Usage
+
+Mac: Usage
 
 Get code:
 
-```bash
+bash
 git clone -b srs https://github.com/ossrs/state-threads.git
-```
+
 
 For OSX:
 
-```bash
+bash
 make darwin-debug
-```
+
 
 For OSX, user must specifies the valgrind header files:
 
-```bash
+bash
 make darwin-debug EXTRA_CFLAGS="-DMD_HAVE_KQUEUE -DMD_VALGRIND -I/usr/local/include"
-```
+
 
 > Remark: M1 is unsupported by ST, please use docker to run, please read [SRS#2747](https://github.com/ossrs/srs/issues/2747).
 
