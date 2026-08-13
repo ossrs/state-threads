@@ -115,7 +115,7 @@ EXTRA_OBJS  = $(TARGETDIR)/md_linux.o $(TARGETDIR)/md_linux2.o
 SFLAGS      = -fPIC
 LDFLAGS     = -shared -soname=$(SONAME) -lc
 OTHER_FLAGS = -Wall
-DEFINES     += -DMD_HAVE_EPOLL -DMD_HAVE_SELECT
+DEFINES     += -DMD_HAVE_EPOLL -DMD_HAVE_SELECT -DMD_HAVE_IO_URING
 endif
 
 ifeq ($(OS), CYGWIN64)
@@ -314,9 +314,20 @@ darwin-optimized:
 	$(MAKE) OS="DARWIN" BUILD="OPT"
 
 linux-debug:
-	$(MAKE) OS="LINUX" BUILD="DBG"
+	$(MAKE) clean
+	$(MAKE) CFLAGS="-g -O0 -Wall -Werror -DDEBUG" \
+		DEFINES="-DMD_HAVE_EPOLL -DMD_HAVE_SELECT -DMD_HAVE_IO_URING" \
+		LDFLAGS="-L/usr/local/lib -L/usr/lib" \
+		LIBS="-luring" \
+		all
+
 linux-optimized:
-	$(MAKE) OS="LINUX" BUILD="OPT"
+	$(MAKE) clean
+	$(MAKE) CFLAGS="-O2 -Wall -Werror" \
+		DEFINES="-DMD_HAVE_EPOLL -DMD_HAVE_SELECT -DMD_HAVE_IO_URING" \
+		LDFLAGS="-L/usr/local/lib -L/usr/lib" \
+		LIBS="-luring" \
+		all
 
 cygwin64-debug:
 	$(MAKE) OS="CYGWIN64" BUILD="DBG"

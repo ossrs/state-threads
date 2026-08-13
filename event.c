@@ -40,6 +40,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/mman.h>
 #include "common.h"
 
 #ifdef MD_HAVE_KQUEUE
@@ -48,6 +49,10 @@
 #ifdef MD_HAVE_EPOLL
 #include <sys/epoll.h>
 #endif
+#ifdef MD_HAVE_IO_URING
+#include <liburing.h>
+#include <linux/io_uring.h>
+#endif
 
 // Global stat.
 #if defined(DEBUG) && defined(DEBUG_STATS)
@@ -55,10 +60,13 @@ __thread unsigned long long _st_stat_epoll = 0;
 __thread unsigned long long _st_stat_epoll_zero = 0;
 __thread unsigned long long _st_stat_epoll_shake = 0;
 __thread unsigned long long _st_stat_epoll_spin = 0;
+__thread unsigned long long _st_stat_io_uring = 0;
+__thread unsigned long long _st_stat_io_uring_zero = 0;
+__thread unsigned long long _st_stat_io_uring_spin = 0;
 #endif
 
-#if !defined(MD_HAVE_KQUEUE) && !defined(MD_HAVE_EPOLL) && !defined(MD_HAVE_SELECT)
-    #error Only support epoll(for Linux), kqueue(for Darwin) or select(for Cygwin)
+#if !defined(MD_HAVE_KQUEUE) && !defined(MD_HAVE_EPOLL) && !defined(MD_HAVE_SELECT) && !defined(MD_HAVE_IO_URING)
+    #error Only support epoll(for Linux), kqueue(for Darwin), select(for Cygwin) or io_uring(for Linux)
 #endif
 
 
@@ -146,6 +154,46 @@ static __thread struct _st_epolldata {
     (_ST_EPOLL_READ_BIT(fd)|_ST_EPOLL_WRITE_BIT(fd)|_ST_EPOLL_EXCEP_BIT(fd))
 
 #endif  /* MD_HAVE_EPOLL */
+
+#ifdef MD_HAVE_IO_URING
+typedef struct _io_uring_fd_data {
+    int rd_ref_cnt;
+    int wr_ref_cnt;
+    int ex_ref_cnt;
+    int revents;
+    struct io_uring_sqe *sqe;
+    struct io_uring_cqe *cqe;
+} _io_uring_fd_data_t;
+
+static __thread struct _st_io_uringdata {
+    _io_uring_fd_data_t *fd_data;
+    struct io_uring *ring;
+    struct io_uring_sqe *sqes;
+    struct io_uring_cqe *cqes;
+    int fd_data_size;
+    int ring_size;
+    int ring_cnt;
+    int fd_hint;
+    int ringfd;
+    pid_t pid;
+    struct io_uring_params params;
+} *_st_io_uring_data;
+
+#ifndef ST_IO_URING_RING_SIZE
+    #define ST_IO_URING_RING_SIZE 4096
+#endif
+
+#define _ST_IO_URING_READ_CNT(fd)   (_st_io_uring_data->fd_data[fd].rd_ref_cnt)
+#define _ST_IO_URING_WRITE_CNT(fd)  (_st_io_uring_data->fd_data[fd].wr_ref_cnt)
+#define _ST_IO_URING_EXCEP_CNT(fd)  (_st_io_uring_data->fd_data[fd].ex_ref_cnt)
+#define _ST_IO_URING_REVENTS(fd)    (_st_io_uring_data->fd_data[fd].revents)
+
+#define _ST_IO_URING_READ_BIT(fd)   (_ST_IO_URING_READ_CNT(fd) ? IORING_POLL_ADD_MULTI : 0)
+#define _ST_IO_URING_WRITE_BIT(fd)  (_ST_IO_URING_WRITE_CNT(fd) ? IORING_POLL_ADD_MULTI : 0)
+#define _ST_IO_URING_EXCEP_BIT(fd)  (_ST_IO_URING_EXCEP_CNT(fd) ? IORING_POLL_ADD_MULTI : 0)
+#define _ST_IO_URING_EVENTS(fd) \
+    (_ST_IO_URING_READ_BIT(fd)|_ST_IO_URING_WRITE_BIT(fd)|_ST_IO_URING_EXCEP_BIT(fd))
+#endif  /* MD_HAVE_IO_URING */
 
 __thread _st_eventsys_t *_st_eventsys = NULL;
 
@@ -654,7 +702,7 @@ ST_HIDDEN void _st_kq_pollset_del(struct pollfd *pds, int npds)
 
     /*
      * It's OK if deleting fails because a descriptor will either be
-     * closed or fire only once (we set EV_ONESHOT flag).
+     * closed or deleted in dispatch function after it fires.
      */
     _st_kq_data->dellist_cnt = 0;
     for (pd = pds; pd < epd; pd++) {
@@ -759,28 +807,11 @@ ST_HIDDEN void _st_kq_dispatch(void)
             if (notify) {
                 st_clist_remove(&pq->links);
                 pq->on_ioq = 0;
-                for (pds = pq->pds; pds < epds; pds++) {
-                    osfd = pds->fd;
-                    events = pds->events;
-                    /*
-                     * We set EV_ONESHOT flag so we only need to delete
-                     * descriptor if it didn't fire.
-                     */
-                    if ((events & POLLIN) && (--_ST_KQ_READ_CNT(osfd) == 0) && ((_ST_KQ_REVENTS(osfd) & POLLIN) == 0)) {
-                        memset(&kev, 0, sizeof(kev));
-                        kev.ident = osfd;
-                        kev.filter = EVFILT_READ;
-                        kev.flags = EV_DELETE;
-                        _st_kq_dellist_add(&kev);
-                    }
-                    if ((events & POLLOUT) && (--_ST_KQ_WRITE_CNT(osfd) == 0) && ((_ST_KQ_REVENTS(osfd) & POLLOUT) == 0)) {
-                        memset(&kev, 0, sizeof(kev));
-                        kev.ident = osfd;
-                        kev.filter = EVFILT_WRITE;
-                        kev.flags = EV_DELETE;
-                        _st_kq_dellist_add(&kev);
-                    }
-                }
+                /*
+                 * Here we will only delete/modify descriptors that
+                 * didn't fire (see comments in _st_kq_pollset_del()).
+                 */
+                _st_kq_pollset_del(pq->pds, pq->npds);
 
                 if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
                     _st_del_sleep_q(pq->thread);
@@ -789,17 +820,17 @@ ST_HIDDEN void _st_kq_dispatch(void)
             }
         }
 
-        if (_st_kq_data->dellist_cnt > 0) {
-            int rv;
-            do {
-                /* This kevent() won't block since result list size is 0 */
-                rv = kevent(_st_kq_data->kq, _st_kq_data->dellist, _st_kq_data->dellist_cnt, NULL, 0, NULL);
-            } while (rv < 0 && errno == EINTR);
-        }
-
         for (i = 0; i < nfd; i++) {
+            /* Delete/modify descriptors that fired */
             osfd = _st_kq_data->evtlist[i].ident;
             _ST_KQ_REVENTS(osfd) = 0;
+            events = _ST_KQ_EVENTS(osfd);
+            op = events ? EPOLL_CTL_MOD : EPOLL_CTL_DEL;
+            kev.events = events;
+            kev.data.fd = osfd;
+            if (kevent(_st_kq_data->kq, &kev, 1, NULL, 0, NULL) == 0 && op == EPOLL_CTL_DEL) {
+                _st_kq_data->evtlist_cnt--;
+            }
         }
     } else if (nfd < 0) {
         if (errno == EBADF && _st_kq_data->pid != getpid()) {
@@ -1123,13 +1154,6 @@ ST_HIDDEN void _st_epoll_dispatch(void)
                     revents |= POLLIN;
                 if ((events & POLLOUT) && (_ST_EPOLL_REVENTS(osfd) & EPOLLOUT))
                     revents |= POLLOUT;
-                if ((events & POLLPRI) && (_ST_EPOLL_REVENTS(osfd) & EPOLLPRI))
-                    revents |= POLLPRI;
-                if (_ST_EPOLL_REVENTS(osfd) & EPOLLERR)
-                    revents |= POLLERR;
-                if (_ST_EPOLL_REVENTS(osfd) & EPOLLHUP)
-                    revents |= POLLHUP;
-
                 pds->revents = revents;
                 if (revents) {
                     notify = 1;
@@ -1231,6 +1255,459 @@ static _st_eventsys_t _st_epoll_eventsys = {
 #endif  /* MD_HAVE_EPOLL */
 
 
+#ifdef MD_HAVE_IO_URING
+/*****************************************
+ * io_uring event system
+ */
+ST_HIDDEN int _st_io_uring_init(void)
+{
+    int err = 0;
+    int rv = 0;
+
+    _st_io_uring_data = (struct _st_io_uringdata *) calloc(1, sizeof(*_st_io_uring_data));
+    if (!_st_io_uring_data)
+        return -1;
+
+    _st_io_uring_data->ring_size = ST_IO_URING_RING_SIZE;
+    memset(&_st_io_uring_data->params, 0, sizeof(_st_io_uring_data->params));
+    if ((_st_io_uring_data->ringfd = io_uring_setup(_st_io_uring_data->ring_size, &_st_io_uring_data->params)) < 0) {
+        err = errno;
+        rv = -1;
+        goto cleanup_io_uring;
+    }
+    fcntl(_st_io_uring_data->ringfd, F_SETFD, FD_CLOEXEC);
+    _st_io_uring_data->pid = getpid();
+
+    /* Map the ring */
+    _st_io_uring_data->ring = (struct io_uring *)mmap(NULL, _st_io_uring_data->params.sq_off.array + _st_io_uring_data->params.sq_entries * sizeof(unsigned),
+                                                     PROT_READ | PROT_WRITE,
+                                                     MAP_SHARED | MAP_POPULATE,
+                                                     _st_io_uring_data->ringfd,
+                                                     IORING_OFF_SQ_RING);
+    if (_st_io_uring_data->ring == MAP_FAILED) {
+        err = errno;
+        rv = -1;
+        goto cleanup_io_uring;
+    }
+
+    /* Map the submission queue */
+    _st_io_uring_data->sqes = (struct io_uring_sqe *)mmap(NULL, _st_io_uring_data->params.sq_entries * sizeof(struct io_uring_sqe),
+                                                         PROT_READ | PROT_WRITE,
+                                                         MAP_SHARED | MAP_POPULATE,
+                                                         _st_io_uring_data->ringfd,
+                                                         IORING_OFF_SQES);
+    if (_st_io_uring_data->sqes == MAP_FAILED) {
+        err = errno;
+        rv = -1;
+        munmap(_st_io_uring_data->ring, _st_io_uring_data->params.sq_off.array + _st_io_uring_data->params.sq_entries * sizeof(unsigned));
+        goto cleanup_io_uring;
+    }
+
+    /* Map the completion queue */
+    _st_io_uring_data->cqes = (struct io_uring_cqe *)mmap(NULL, _st_io_uring_data->params.cq_off.cqes + _st_io_uring_data->params.cq_entries * sizeof(struct io_uring_cqe),
+                                                         PROT_READ | PROT_WRITE,
+                                                         MAP_SHARED | MAP_POPULATE,
+                                                         _st_io_uring_data->ringfd,
+                                                         IORING_OFF_CQ_RING);
+    if (_st_io_uring_data->cqes == MAP_FAILED) {
+        err = errno;
+        rv = -1;
+        munmap(_st_io_uring_data->sqes, _st_io_uring_data->params.sq_entries * sizeof(struct io_uring_sqe));
+        munmap(_st_io_uring_data->ring, _st_io_uring_data->params.sq_off.array + _st_io_uring_data->params.sq_entries * sizeof(unsigned));
+        goto cleanup_io_uring;
+    }
+
+    /*
+     * Allocate file descriptor data array.
+     * FD_SETSIZE looks like good initial size.
+     */
+    _st_io_uring_data->fd_data_size = FD_SETSIZE;
+    _st_io_uring_data->fd_data = (_io_uring_fd_data_t *)calloc(_st_io_uring_data->fd_data_size, sizeof(_io_uring_fd_data_t));
+    if (!_st_io_uring_data->fd_data) {
+        err = errno;
+        rv = -1;
+        goto cleanup_io_uring;
+    }
+
+    /* Allocate event lists */
+    _st_io_uring_data->ring_size = ST_IO_URING_RING_SIZE;
+    _st_io_uring_data->sqes = (struct io_uring_sqe *)malloc(_st_io_uring_data->ring_size * sizeof(struct io_uring_sqe));
+    if (!_st_io_uring_data->sqes) {
+        err = ENOMEM;
+        rv = -1;
+    }
+
+ cleanup_io_uring:
+    if (rv < 0) {
+        if (_st_io_uring_data->ringfd >= 0) {
+            munmap(_st_io_uring_data->cqes, _st_io_uring_data->params.cq_off.cqes + _st_io_uring_data->params.cq_entries * sizeof(struct io_uring_cqe));
+            munmap(_st_io_uring_data->sqes, _st_io_uring_data->params.sq_entries * sizeof(struct io_uring_sqe));
+            munmap(_st_io_uring_data->ring, _st_io_uring_data->params.sq_off.array + _st_io_uring_data->params.sq_entries * sizeof(unsigned));
+            close(_st_io_uring_data->ringfd);
+        }
+        free(_st_io_uring_data->fd_data);
+        free(_st_io_uring_data->sqes);
+        free(_st_io_uring_data);
+        _st_io_uring_data = NULL;
+        errno = err;
+    }
+
+    return rv;
+}
+
+ST_HIDDEN int _st_io_uring_fd_data_expand(int maxfd)
+{
+    _io_uring_fd_data_t *ptr;
+    int n = _st_io_uring_data->fd_data_size;
+
+    while (maxfd >= n)
+        n <<= 1;
+
+    ptr = (_io_uring_fd_data_t *)realloc(_st_io_uring_data->fd_data, n * sizeof(_io_uring_fd_data_t));
+    if (!ptr)
+        return -1;
+
+    memset(ptr + _st_io_uring_data->fd_data_size, 0, (n - _st_io_uring_data->fd_data_size) * sizeof(_io_uring_fd_data_t));
+
+    _st_io_uring_data->fd_data = ptr;
+    _st_io_uring_data->fd_data_size = n;
+
+    return 0;
+}
+
+ST_HIDDEN int _st_io_uring_addlist_expand(int avail)
+{
+    struct io_uring_sqe *ptr;
+    int n = _st_io_uring_data->ring_size;
+
+    while (avail > n - _st_io_uring_data->ring_cnt)
+        n <<= 1;
+
+    ptr = (struct io_uring_sqe *)realloc(_st_io_uring_data->sqes, n * sizeof(struct io_uring_sqe));
+    if (!ptr)
+        return -1;
+
+    _st_io_uring_data->sqes = ptr;
+    _st_io_uring_data->ring_size = n;
+
+    /*
+     * Try to expand the completion queue entries too
+     * (although we don't have to do it).
+     */
+    struct io_uring_cqe *cqe_ptr = (struct io_uring_cqe *)realloc(_st_io_uring_data->cqes, n * sizeof(struct io_uring_cqe));
+    if (cqe_ptr) {
+        _st_io_uring_data->cqes = cqe_ptr;
+    }
+
+    return 0;
+}
+
+ST_HIDDEN void _st_io_uring_addlist_add(const struct io_uring_sqe *sqe)
+{
+    ST_ASSERT(_st_io_uring_data->ring_cnt < _st_io_uring_data->ring_size);
+    memcpy(_st_io_uring_data->sqes + _st_io_uring_data->ring_cnt, sqe, sizeof(struct io_uring_sqe));
+    _st_io_uring_data->ring_cnt++;
+}
+
+ST_HIDDEN void _st_io_uring_dellist_add(const struct io_uring_sqe *sqe)
+{
+    int n = _st_io_uring_data->ring_size;
+
+    if (_st_io_uring_data->ring_cnt >= n) {
+        struct io_uring_sqe *ptr;
+
+        n <<= 1;
+        ptr = (struct io_uring_sqe *)realloc(_st_io_uring_data->sqes, n * sizeof(struct io_uring_sqe));
+        if (!ptr) {
+            /* See comment in _st_io_uring_pollset_del() */
+            return;
+        }
+
+        _st_io_uring_data->sqes = ptr;
+        _st_io_uring_data->ring_size = n;
+    }
+
+    memcpy(_st_io_uring_data->sqes + _st_io_uring_data->ring_cnt, sqe, sizeof(struct io_uring_sqe));
+    _st_io_uring_data->ring_cnt++;
+}
+
+ST_HIDDEN int _st_io_uring_pollset_add(struct pollfd *pds, int npds)
+{
+    struct io_uring_sqe sqe;
+    struct pollfd *pd;
+    struct pollfd *epd = pds + npds;
+
+    /*
+     * Pollset adding is "atomic". That is, either it succeeded for
+     * all descriptors in the set or it failed. It means that we
+     * need to do all the checks up front so we don't have to
+     * "unwind" if adding of one of the descriptors failed.
+     */
+    for (pd = pds; pd < epd; pd++) {
+        /* POLLIN and/or POLLOUT must be set, but nothing else */
+        if (pd->fd < 0 || !pd->events || (pd->events & ~(POLLIN | POLLOUT))) {
+            errno = EINVAL;
+            return -1;
+        }
+        if (pd->fd >= _st_io_uring_data->fd_data_size &&
+            _st_io_uring_fd_data_expand(pd->fd) < 0)
+            return -1;
+    }
+
+    /*
+     * Make sure we have enough room in the addlist for twice as many
+     * descriptors as in the pollset (for both READ and WRITE filters).
+     */
+    npds <<= 1;
+    if (npds > _st_io_uring_data->ring_size - _st_io_uring_data->ring_cnt && _st_io_uring_addlist_expand(npds) < 0)
+        return -1;
+
+    for (pd = pds; pd < epd; pd++) {
+        if ((pd->events & POLLIN) && (_ST_IO_URING_READ_CNT(pd->fd)++ == 0)) {
+            memset(&sqe, 0, sizeof(sqe));
+            sqe.opcode = IORING_OP_READ;
+            sqe.fd = pd->fd;
+            sqe.off = 0;
+            sqe.addr = (uint64_t)&_st_io_uring_data->fd_data[pd->fd].revents;
+            sqe.len = sizeof(_st_io_uring_data->fd_data[pd->fd].revents);
+            _st_io_uring_addlist_add(&sqe);
+        }
+        if ((pd->events & POLLOUT) && (_ST_IO_URING_WRITE_CNT(pd->fd)++ == 0)) {
+            memset(&sqe, 0, sizeof(sqe));
+            sqe.opcode = IORING_OP_WRITE;
+            sqe.fd = pd->fd;
+            sqe.off = 0;
+            sqe.addr = (uint64_t)&_st_io_uring_data->fd_data[pd->fd].revents;
+            sqe.len = sizeof(_st_io_uring_data->fd_data[pd->fd].revents);
+            _st_io_uring_addlist_add(&sqe);
+        }
+    }
+
+    return 0;
+}
+
+ST_HIDDEN void _st_io_uring_pollset_del(struct pollfd *pds, int npds)
+{
+    struct io_uring_sqe sqe;
+    struct pollfd *pd;
+    struct pollfd *epd = pds + npds;
+
+    /*
+     * It's OK if deleting fails because a descriptor will either be
+     * closed or deleted in dispatch function after it fires.
+     */
+    _st_io_uring_data->ring_cnt = 0;
+    for (pd = pds; pd < epd; pd++) {
+        if ((pd->events & POLLIN) && (--_ST_IO_URING_READ_CNT(pd->fd) == 0)) {
+            memset(&sqe, 0, sizeof(sqe));
+            sqe.opcode = IORING_OP_POLL_REMOVE;
+            sqe.fd = pd->fd;
+            sqe.off = 0;
+            sqe.addr = (uint64_t)&_st_io_uring_data->fd_data[pd->fd].revents;
+            sqe.len = sizeof(_st_io_uring_data->fd_data[pd->fd].revents);
+            _st_io_uring_dellist_add(&sqe);
+        }
+        if ((pd->events & POLLOUT) && (--_ST_IO_URING_WRITE_CNT(pd->fd) == 0)) {
+            memset(&sqe, 0, sizeof(sqe));
+            sqe.opcode = IORING_OP_POLL_REMOVE;
+            sqe.fd = pd->fd;
+            sqe.off = 0;
+            sqe.addr = (uint64_t)&_st_io_uring_data->fd_data[pd->fd].revents;
+            sqe.len = sizeof(_st_io_uring_data->fd_data[pd->fd].revents);
+            _st_io_uring_dellist_add(&sqe);
+        }
+    }
+
+    if (_st_io_uring_data->ring_cnt > 0) {
+        /*
+         * We do "synchronous" io_uring deletes to avoid deleting
+         * closed descriptors and other possible problems.
+         */
+        int rv;
+        do {
+            /* This io_uring() won't block since result list size is 0 */
+            rv = io_uring_submit(_st_io_uring_data->ring);
+        } while (rv < 0 && errno == EINTR);
+    }
+}
+
+ST_HIDDEN void _st_io_uring_dispatch(void)
+{
+    st_utime_t min_timeout;
+    _st_clist_t *q;
+    _st_pollq_t *pq;
+    struct pollfd *pds, *epds;
+    struct io_uring_cqe *cqe;
+    int timeout, nfd, osfd, notify;
+    int events, op;
+    short revents;
+
+    #if defined(DEBUG) && defined(DEBUG_STATS)
+    ++_st_stat_io_uring;
+    #endif
+
+    if (_ST_SLEEPQ == NULL) {
+        timeout = -1;
+    } else {
+        min_timeout = (_ST_SLEEPQ->due <= _ST_LAST_CLOCK) ? 0 : (_ST_SLEEPQ->due - _ST_LAST_CLOCK);
+        timeout = (int) (min_timeout / 1000);
+
+        // At least wait 1ms when <1ms, to avoid io_uring spin loop.
+        if (timeout == 0) {
+            #if defined(DEBUG) && defined(DEBUG_STATS)
+            ++_st_stat_io_uring_zero;
+            #endif
+
+            if (min_timeout > 0) {
+                #if defined(DEBUG) && defined(DEBUG_STATS)
+                ++_st_stat_io_uring_shake;
+                #endif
+
+                timeout = 1;
+            }
+        }
+    }
+
+    /* Check for I/O operations */
+    nfd = io_uring_wait_cqe(_st_io_uring_data->ring, &cqe);
+
+    #if defined(DEBUG) && defined(DEBUG_STATS)
+    if (nfd <= 0) {
+        ++_st_stat_io_uring_spin;
+    }
+    #endif
+
+    if (nfd > 0) {
+        /* 处理单个完成事件 */
+        osfd = cqe->user_data;
+        _ST_IO_URING_REVENTS(osfd) = cqe->res;
+        if (_ST_IO_URING_REVENTS(osfd) & (IORING_POLL_ADD_MULTI)) {
+            /* Also set I/O bits on error */
+            _ST_IO_URING_REVENTS(osfd) |= _ST_IO_URING_EVENTS(osfd);
+        }
+
+        for (q = _ST_IOQ.next; q != &_ST_IOQ; q = q->next) {
+            pq = _ST_POLLQUEUE_PTR(q);
+            notify = 0;
+            epds = pq->pds + pq->npds;
+
+            for (pds = pq->pds; pds < epds; pds++) {
+                if (_ST_IO_URING_REVENTS(pds->fd) == 0) {
+                    pds->revents = 0;
+                    continue;
+                }
+                osfd = pds->fd;
+                events = pds->events;
+                revents = 0;
+                if ((events & POLLIN) && (_ST_IO_URING_REVENTS(osfd) & IORING_POLL_ADD_MULTI))
+                    revents |= POLLIN;
+                if ((events & POLLOUT) && (_ST_IO_URING_REVENTS(osfd) & IORING_POLL_ADD_MULTI))
+                    revents |= POLLOUT;
+                pds->revents = revents;
+                if (revents) {
+                    notify = 1;
+                }
+            }
+            if (notify) {
+                ST_REMOVE_LINK(&pq->links);
+                pq->on_ioq = 0;
+                /*
+                 * Here we will only delete/modify descriptors that
+                 * didn't fire (see comments in _st_io_uring_pollset_del()).
+                 */
+                _st_io_uring_pollset_del(pq->pds, pq->npds);
+
+                if (pq->thread->flags & _ST_FL_ON_SLEEPQ)
+                    _ST_DEL_SLEEPQ(pq->thread);
+                pq->thread->state = _ST_ST_RUNNABLE;
+                _ST_ADD_RUNQ(pq->thread);
+            }
+        }
+
+        /* 处理单个完成事件 */
+        osfd = cqe->user_data;
+        _ST_IO_URING_REVENTS(osfd) = 0;
+        events = _ST_IO_URING_EVENTS(osfd);
+        op = events ? IORING_OP_POLL_ADD : IORING_OP_POLL_REMOVE;
+        cqe->user_data = osfd;
+        if (io_uring_submit(_st_io_uring_data->ring) == 0 && op == IORING_OP_POLL_REMOVE) {
+            _st_io_uring_data->ring_cnt--;
+        }
+        
+        /* 告知io_uring我们已经处理了这个完成事件 */
+        io_uring_cqe_seen(_st_io_uring_data->ring, cqe);
+    }
+}
+
+ST_HIDDEN int _st_io_uring_fd_new(int osfd)
+{
+    if (osfd >= _st_io_uring_data->fd_data_size && _st_io_uring_fd_data_expand(osfd) < 0)
+        return -1;
+
+    return 0;
+}
+
+ST_HIDDEN int _st_io_uring_fd_close(int osfd)
+{
+    if (_ST_IO_URING_READ_CNT(osfd) || _ST_IO_URING_WRITE_CNT(osfd)) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    return 0;
+}
+
+ST_HIDDEN int _st_io_uring_fd_getlimit(void)
+{
+    /* zero means no specific limit */
+    return 0;
+}
+
+/*
+ * Check if io_uring functions are just stubs.
+ */
+ST_HIDDEN int _st_io_uring_is_supported(void)
+{
+    struct io_uring_params params;
+    int fd;
+
+    memset(&params, 0, sizeof(params));
+    fd = io_uring_setup(1, &params);
+    if (fd < 0) {
+        return (errno != ENOSYS);
+    }
+    close(fd);
+    return 1;
+}
+
+ST_HIDDEN void _st_io_uring_destroy(void)
+{
+    if (_st_io_uring_data->ringfd >= 0) {
+        munmap(_st_io_uring_data->cqes, _st_io_uring_data->params.cq_off.cqes + _st_io_uring_data->params.cq_entries * sizeof(struct io_uring_cqe));
+        munmap(_st_io_uring_data->sqes, _st_io_uring_data->params.sq_entries * sizeof(struct io_uring_sqe));
+        munmap(_st_io_uring_data->ring, _st_io_uring_data->params.sq_off.array + _st_io_uring_data->params.sq_entries * sizeof(unsigned));
+        close(_st_io_uring_data->ringfd);
+    }
+    free(_st_io_uring_data->fd_data);
+    free(_st_io_uring_data);
+    _st_io_uring_data = NULL;
+}
+
+static _st_eventsys_t _st_io_uring_eventsys = {
+    "io_uring",
+    ST_EVENTSYS_ALT,
+    _st_io_uring_init,
+    _st_io_uring_dispatch,
+    _st_io_uring_pollset_add,
+    _st_io_uring_pollset_del,
+    _st_io_uring_fd_new,
+    _st_io_uring_fd_close,
+    _st_io_uring_fd_getlimit,
+    _st_io_uring_destroy
+};
+#endif  /* MD_HAVE_IO_URING */
+
+
 /*****************************************
  * Public functions
  */
@@ -1242,26 +1719,45 @@ int st_set_eventsys(int eventsys)
         return -1;
     }
 
-    if (eventsys == ST_EVENTSYS_SELECT || eventsys == ST_EVENTSYS_DEFAULT) {
-#if defined (MD_HAVE_SELECT)
+    if (eventsys == ST_EVENTSYS_SELECT) {
+#ifdef MD_HAVE_SELECT
         _st_eventsys = &_st_select_eventsys;
         return 0;
 #endif
+        return -1;
     }
 
-    if (eventsys == ST_EVENTSYS_ALT) {
-#if defined (MD_HAVE_KQUEUE)
+    /* For ST_EVENTSYS_DEFAULT and ST_EVENTSYS_ALT, try each event system in order of preference */
+#ifdef MD_HAVE_KQUEUE
+    if (eventsys == ST_EVENTSYS_DEFAULT || eventsys == ST_EVENTSYS_ALT) {
         _st_eventsys = &_st_kq_eventsys;
         return 0;
-#elif defined (MD_HAVE_EPOLL)
-        if (_st_epoll_is_supported()) {
-            _st_eventsys = &_st_epoll_eventsys;
+    }
+#endif
+
+#ifdef MD_HAVE_EPOLL
+    if (eventsys == ST_EVENTSYS_DEFAULT || eventsys == ST_EVENTSYS_ALT) {
+        _st_eventsys = &_st_epoll_eventsys;
+        return 0;
+    }
+#endif
+
+#ifdef MD_HAVE_IO_URING
+    if (eventsys == ST_EVENTSYS_DEFAULT || eventsys == ST_EVENTSYS_ALT) {
+        if (_st_io_uring_is_supported()) {
+            _st_eventsys = &_st_io_uring_eventsys;
             return 0;
         }
-#endif
     }
+#endif
 
-    errno = EINVAL;
+#ifdef MD_HAVE_SELECT
+    if (eventsys == ST_EVENTSYS_DEFAULT || eventsys == ST_EVENTSYS_ALT) {
+        _st_eventsys = &_st_select_eventsys;
+        return 0;
+    }
+#endif
+
     return -1;
 }
 

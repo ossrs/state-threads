@@ -1,4 +1,3 @@
-
 # The main dir of st.
 ST_DIR = ..
 # The main dir of st utest.
@@ -11,6 +10,11 @@ CXXFLAGS +=  -g -O0 -std=c++11
 CXXFLAGS += -DGTEST_USE_OWN_TR1_TUPLE=1
 # Flags for warnings.
 WARNFLAGS += -Wall -Wno-deprecated-declarations -Wno-unused-private-field -Wno-unused-command-line-argument
+
+# Add liburing support
+CXXFLAGS += -DMD_HAVE_IO_URING
+LDFLAGS += -L/usr/local/lib -L/usr/lib
+LIBS += -luring
 
 # House-keeping build targets.
 all : $(ST_DIR)/obj/st_utest
@@ -81,5 +85,5 @@ $(ST_DIR)/obj/%.o : %.cpp $(ST_UTEST_DEPS) $(UTEST_DEPS) $(GTEST_DIR)/include/gt
 
 # Generate the utest binary
 $(ST_DIR)/obj/st_utest : $(OBJECTS) $(ST_DIR)/obj/gtest.a $(ST_UTEST_DEPS)
-	$(CXX) -o $@ $(CXXFLAGS) $(UTEST_FLAGS) \
-        -lpthread -ldl $^
+	$(CXX) -o $@ $(CXXFLAGS) $(UTEST_FLAGS) $(LDFLAGS) \
+        $(OBJECTS) $(ST_DIR)/obj/gtest.a $(ST_UTEST_DEPS) -lpthread -ldl $(LIBS)

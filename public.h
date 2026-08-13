@@ -69,6 +69,7 @@
 #define ST_EVENTSYS_DEFAULT 0
 #define ST_EVENTSYS_SELECT  1
 #define ST_EVENTSYS_ALT     3
+#define ST_EVENTSYS_IO_URING 4
 
 #ifdef __cplusplus
 extern "C" {
