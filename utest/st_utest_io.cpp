@@ -396,6 +396,33 @@ VOID TEST(IoReadTest, ReadvTimesOut)
     EXPECT_EQ(ETIME, errno);
 }
 
+// A message whose buffers are already full, such as an RTMP message with no payload left to read, comes back to
+// st_readv_resid with nothing to read. It returns 0 at once, without reading or waiting, and the data queued on the
+// connection stays for the next read. Locks in current behavior.
+VOID TEST(IoReadTest, ReadvResidWithNothingToReadReturnsAtOnce)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_EQ(1, st_write(pair.client_, "x", 1, ST_UTEST_TIMEOUT));
+
+    char header[4] = {0};
+    struct iovec iovs[1];
+    iovs[0].iov_base = header;
+    iovs[0].iov_len = 3;
+
+    struct iovec* iov = iovs + 1;
+    int iov_size = 0;
+    st_utime_t starttime = st_utime();
+    EXPECT_EQ(0, st_readv_resid(pair.server_, &iov, &iov_size, 1000 * ST_UTIME_MILLISECONDS));
+    EXPECT_LT(st_utime() - starttime, 50 * ST_UTIME_MILLISECONDS);
+    EXPECT_EQ(0, iov_size);
+    EXPECT_TRUE(iov == iovs + 1);
+
+    char c = 0;
+    EXPECT_EQ(1, st_read(pair.server_, &c, 1, ST_UTEST_TIMEOUT));
+    EXPECT_EQ('x', c);
+}
+
 // The network of a publisher dies and the connection is reset. Every read API fails with -1 and ECONNRESET instead of
 // waiting; st_read_fully fails too, rather than returning a short count as it does on a normal close. Each call gets
 // its own connection, because only the first read after a reset reports the error. Locks in current behavior.
@@ -1474,6 +1501,36 @@ VOID TEST(IoWriteTest, WritevResidResumesAfterTimeout)
 
     st_thread_join(player, NULL);
     EXPECT_TRUE(p.received_ == msgs.data_);
+}
+
+// SRS has nothing to send to a stalled player whose send and receive buffers are full: a message whose header and
+// payload are both empty, no messages at all, or the empty tail st_writev_resid leaves once everything is sent. Each
+// call returns 0 at once instead of waiting for the player, and the player receives only what was queued before.
+// Locks in current behavior.
+VOID TEST(IoWriteTest, WritevWithNothingToSendReturnsAtOnce)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_TRUE(io_shrink_send_buffer(pair));
+    std::string filled;
+    ASSERT_TRUE(io_fill_buffers(st_netfd_fileno(pair.server_), filled));
+
+    IoTestMessages msgs(1, 0);
+    msgs.iovs_[0].iov_len = 0;
+    st_utime_t timeout = 1000 * ST_UTIME_MILLISECONDS;
+
+    st_utime_t starttime = st_utime();
+    EXPECT_EQ(0, st_writev(pair.server_, &msgs.iovs_[0], 2, timeout));
+    EXPECT_EQ(0, st_writev(pair.server_, &msgs.iovs_[0], 0, timeout));
+
+    struct iovec* iov = &msgs.iovs_[0] + 2;
+    int iov_size = 0;
+    EXPECT_EQ(0, st_writev_resid(pair.server_, &iov, &iov_size, timeout));
+    EXPECT_LT(st_utime() - starttime, 50 * ST_UTIME_MILLISECONDS);
+    EXPECT_EQ(0, iov_size);
+    EXPECT_TRUE(iov == &msgs.iovs_[0] + 2);
+
+    EXPECT_EQ(filled.size(), io_drain(pair.client_));
 }
 
 // SRS writes a large buffer, such as an HTTP response body, with st_write. To a slow player the write is partial:

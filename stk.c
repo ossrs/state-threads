@@ -105,8 +105,8 @@ _st_stack_t *_st_stack_new(int stack_size)
 #endif
     
     /* Make a new thread stack object. */
-    if ((ts = (_st_stack_t *)calloc(1, sizeof(_st_stack_t))) == NULL)
-        return NULL;
+    if ((ts = (_st_stack_t *)calloc(1, sizeof(_st_stack_t))) == NULL) /* GCOVR_EXCL_BR_LINE */
+        return NULL; /* GCOVR_EXCL_LINE */
     ts->vaddr_size = stack_size + 2*REDZONE + extra;
     ts->vaddr = _st_new_stk_segment(ts->vaddr_size);
     if (!ts->vaddr) {

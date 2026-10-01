@@ -15,6 +15,12 @@
 #include <string.h>
 #include <unistd.h>
 
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#else
+#include <malloc.h>
+#endif
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/mman.h>
@@ -1217,4 +1223,232 @@ VOID TEST(SelectTest, ConnectionPastLimitRefused)
 #endif
     EXPECT_EQ(0, r.p_->close_r0_);
     EXPECT_EQ(0, r.p_->listener_close_r0_);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for a writer that leaves select without being woken, such as SRS sending to a player that stopped reading:
+// the send coroutine gives up on its send timeout, or the server stops it when it kicks the player. ST takes the writer
+// out of the write set itself, while the descriptor stays open and other coroutines may still wait on it.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct SelectTestStuck {
+    int init_r0_;
+    bool filled_;
+    // Whether the timed sender was done, and the other sender still waiting, after 50 ms.
+    bool timed_done_;
+    bool stopped_waiting_;
+    SelectTestRead timed_;
+    SelectTestRead stopped_;
+    SelectTestRead receive_;
+    int close_r0_;
+    SelectTestRead next_;
+};
+
+struct SelectTestTimedSender {
+    st_netfd_t stfd_;
+    st_utime_t timeout_;
+    SelectTestRead* result_;
+};
+
+static void* select_test_timed_sender_coroutine(void* arg)
+{
+    SelectTestTimedSender* s = (SelectTestTimedSender*)arg;
+    errno = 0;
+    s->result_->r0_ = (int)st_write(s->stfd_, "z", 1, s->timeout_);
+    s->result_->errno_ = errno;
+    s->result_->done_ = true;
+    return NULL;
+}
+
+static void select_test_stuck(void* arg)
+{
+    SelectTestStuck* r = (SelectTestStuck*)arg;
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) return;
+    int sndbuf = 4096;
+    setsockopt(fds[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    st_netfd_t conn = st_netfd_open_socket(fds[0]);
+    if (!conn) return;
+
+    // The next client's descriptors are higher than the player's.
+    int next_fds[2];
+    if (pipe(next_fds) < 0) return;
+    st_netfd_t next = st_netfd_open(next_fds[0]);
+    if (!next) return;
+
+    // The player reads nothing, so the connection's send buffer fills up.
+    char buf[1024];
+    memset(buf, 0, sizeof(buf));
+    while (::write(fds[0], buf, sizeof(buf)) > 0) {
+    }
+    r->filled_ = (errno == EAGAIN || errno == EWOULDBLOCK);
+
+    SelectTestReader receiver = {conn, SELECT_TEST_TIMEOUT, &r->receive_};
+    SelectTestTimedSender timed = {conn, 10 * ST_UTIME_MILLISECONDS, &r->timed_};
+    SelectTestTimedSender stopped = {conn, SELECT_TEST_TIMEOUT, &r->stopped_};
+    st_thread_t receive_trd = st_thread_create(select_test_reader_coroutine, &receiver, 1, 0);
+    st_thread_t timed_trd = st_thread_create(select_test_timed_sender_coroutine, &timed, 1, 0);
+    st_thread_t stopped_trd = st_thread_create(select_test_timed_sender_coroutine, &stopped, 1, 0);
+    if (!receive_trd || !timed_trd || !stopped_trd) return;
+
+    // One sender gives up on its send timeout, and the other keeps waiting.
+    st_usleep(50 * ST_UTIME_MILLISECONDS);
+    r->timed_done_ = r->timed_.done_;
+    r->stopped_waiting_ = !r->stopped_.done_;
+
+    // The server stops the other sender, the last writer on the connection.
+    st_thread_interrupt(stopped_trd);
+    st_thread_join(timed_trd, NULL);
+    st_thread_join(stopped_trd, NULL);
+
+    // The player still sends, and the receiver wakes with it.
+    if (::write(fds[1], "x", 1) != 1) return;
+    st_thread_join(receive_trd, NULL);
+    r->close_r0_ = st_netfd_close(conn);
+    ::close(fds[1]);
+
+    // The next client is served after the player's connection closes.
+    SelectTestReader next_reader = {next, SELECT_TEST_TIMEOUT, &r->next_};
+    st_thread_t next_trd = st_thread_create(select_test_reader_coroutine, &next_reader, 1, 0);
+    if (!next_trd) return;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    if (::write(next_fds[1], "y", 1) != 1) return;
+    st_thread_join(next_trd, NULL);
+    st_netfd_close(next);
+    ::close(next_fds[1]);
+}
+
+// A player stops reading, so the send buffer of its connection is full, with a receive coroutine and two send
+// coroutines waiting on it. One sender gives up with ETIME on its 10 ms send timeout while the other keeps waiting, then
+// the server stops the other with EINTR. The receiver still wakes on a byte from the player, and the connection closes
+// without EBUSY. Then a reader on another descriptor wakes on its byte, so neither sender left its descriptor in the
+// write set, which select would fail on with EBADF once the connection is closed. Locks in current behavior.
+VOID TEST(SelectTest, StuckSendersLeaveConnection)
+{
+    SelectTestShared<SelectTestStuck> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->close_r0_ = 1;
+    ASSERT_EQ(0, select_test_run(select_test_stuck, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+    ASSERT_TRUE(r.p_->filled_);
+
+    EXPECT_TRUE(r.p_->timed_done_);
+    EXPECT_EQ(-1, r.p_->timed_.r0_);
+    EXPECT_EQ(ETIME, r.p_->timed_.errno_);
+
+    EXPECT_TRUE(r.p_->stopped_waiting_);
+    EXPECT_EQ(-1, r.p_->stopped_.r0_);
+    EXPECT_EQ(EINTR, r.p_->stopped_.errno_);
+
+    EXPECT_EQ(1, r.p_->receive_.r0_);
+    EXPECT_EQ('x', r.p_->receive_.data_);
+    EXPECT_EQ(0, r.p_->close_r0_);
+
+    EXPECT_EQ(1, r.p_->next_.r0_);
+    EXPECT_EQ('y', r.p_->next_.data_);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for st_destroy on select, such as SRS calling srs_st_destroy at exit on Cygwin, where select is the only
+// event system. select has no descriptor to close, so st_destroy only frees the event system's memory: two descriptor
+// sets and the waiter counts of every descriptor. The test reads the heap in use from the allocator before and after.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(__SANITIZE_ADDRESS__)
+#define SELECT_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define SELECT_TEST_ASAN 1
+#endif
+#endif
+
+// The bytes the allocator has handed out and not got back.
+static size_t select_test_heap_in_use()
+{
+#if defined(__APPLE__)
+    malloc_statistics_t stats;
+    malloc_zone_statistics(NULL, &stats);
+    return stats.size_in_use;
+#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+    return mallinfo2().uordblks;
+#else
+    return (size_t)(unsigned int)mallinfo().uordblks;
+#endif
+}
+
+struct SelectTestDestroy {
+    int init_r0_;
+    bool name_is_select_;
+    int read_r0_;
+    char data_;
+    int close_r0_;
+    size_t heap_before_;
+    size_t heap_after_;
+};
+
+static void* select_test_writer_coroutine(void* arg)
+{
+    int fd = *(int*)arg;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    if (::write(fd, "a", 1) != 1) return (void*)-1;
+    return NULL;
+}
+
+static void select_test_destroy(void* arg)
+{
+    SelectTestDestroy* r = (SelectTestDestroy*)arg;
+
+#if defined(M_ARENA_MAX)
+    // glibc counts only its main arena, so this thread allocates there too.
+    mallopt(M_ARENA_MAX, 1);
+#endif
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+    r->name_is_select_ = strcmp(st_get_eventsys_name(), "select") == 0;
+
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) return;
+    st_netfd_t stfd = st_netfd_open_socket(fds[0]);
+    if (!stfd) return;
+
+    // The connection waits for a request, which the client sends a little later.
+    st_thread_t trd = st_thread_create(select_test_writer_coroutine, &fds[1], 1, 0);
+    if (!trd) return;
+    r->read_r0_ = (int)st_read(stfd, &r->data_, 1, SELECT_TEST_TIMEOUT);
+    st_thread_join(trd, NULL);
+
+    r->close_r0_ = st_netfd_close(stfd);
+    ::close(fds[1]);
+
+    r->heap_before_ = select_test_heap_in_use();
+    st_destroy();
+    r->heap_after_ = select_test_heap_in_use();
+}
+
+// A worker thread starts ST on select, serves one connection that waits for a request, closes it, then calls
+// st_destroy as its last ST call, like SRS at exit. st_destroy returns, and the heap in use drops by at least the
+// three descriptor sets select kept. ASAN's allocator keeps no such count, so an ASAN build checks only that
+// st_destroy returns. Locks in current behavior.
+VOID TEST(SelectTest, DestroyFreesEventSystem)
+{
+    SelectTestShared<SelectTestDestroy> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->close_r0_ = 1;
+    ASSERT_EQ(0, select_test_run(select_test_destroy, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+    EXPECT_TRUE(r.p_->name_is_select_);
+
+    // The connection got its request, and closed without EBUSY.
+    EXPECT_EQ(1, r.p_->read_r0_);
+    EXPECT_EQ('a', r.p_->data_);
+    EXPECT_EQ(0, r.p_->close_r0_);
+
+#if !defined(SELECT_TEST_ASAN)
+    EXPECT_GE(r.p_->heap_before_, r.p_->heap_after_ + 3 * sizeof(fd_set));
+#endif
 }

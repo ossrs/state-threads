@@ -97,12 +97,12 @@ int _st_io_init(void)
     sigact.sa_handler = SIG_IGN;
     sigemptyset(&sigact.sa_mask);
     sigact.sa_flags = 0;
-    if (sigaction(SIGPIPE, &sigact, NULL) < 0)
-        return -1;
+    if (sigaction(SIGPIPE, &sigact, NULL) < 0) /* GCOVR_EXCL_BR_LINE */
+        return -1; /* GCOVR_EXCL_LINE */
 
     /* Set maximum number of open file descriptors */
-    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0)
-        return -1;
+    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) /* GCOVR_EXCL_BR_LINE */
+        return -1; /* GCOVR_EXCL_LINE */
 
     fdlim = (*_st_eventsys->fd_getlimit)();
     if (fdlim > 0 && rlim.rlim_max > (rlim_t) fdlim) {
@@ -120,8 +120,8 @@ int _st_io_init(void)
     }
     
     rlim.rlim_cur = rlim.rlim_max;
-    if (setrlimit(RLIMIT_NOFILE, &rlim) < 0)
-        return -1;
+    if (setrlimit(RLIMIT_NOFILE, &rlim) < 0) /* GCOVR_EXCL_BR_LINE */
+        return -1; /* GCOVR_EXCL_LINE */
     _st_osfd_limit = (int) rlim.rlim_max;
 
     return 0;
@@ -166,8 +166,8 @@ static _st_netfd_t *_st_netfd_new(int osfd, int nonblock, int is_socket)
         _st_netfd_freelist = _st_netfd_freelist->next;
     } else {
         fd = calloc(1, sizeof(_st_netfd_t));
-        if (!fd)
-            return NULL;
+        if (!fd) /* GCOVR_EXCL_BR_LINE */
+            return NULL; /* GCOVR_EXCL_LINE */
     }
 
     fd->osfd = osfd;
@@ -304,11 +304,13 @@ _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen, st_
     #error Unknown OS
 #endif
     
+    /* GCOVR_EXCL_START */
     if (!newfd) {
         err = errno;
         close(osfd);
         errno = err;
     }
+    /* GCOVR_EXCL_STOP */
     
     return newfd;
 }
@@ -335,8 +337,8 @@ int st_connect(_st_netfd_t *fd, const struct sockaddr *addr, int addrlen, st_uti
                 return -1;
             /* Try to find out whether the connection setup succeeded or failed */
             n = sizeof(int);
-            if (getsockopt(fd->osfd, SOL_SOCKET, SO_ERROR, (char *)&err, (socklen_t *)&n) < 0)
-                return -1;
+            if (getsockopt(fd->osfd, SOL_SOCKET, SO_ERROR, (char *)&err, (socklen_t *)&n) < 0) /* GCOVR_EXCL_BR_LINE */
+                return -1; /* GCOVR_EXCL_LINE */
             if (err) {
                 errno = err;
                 return -1;
@@ -539,8 +541,8 @@ ssize_t st_writev(_st_netfd_t *fd, const struct iovec *iov, int iov_size, st_uti
                     tmp_iov = local_iov;
                 } else {
                     tmp_iov = calloc(1, (iov_size - index) * sizeof(struct iovec));
-                    if (tmp_iov == NULL)
-                        return -1;
+                    if (tmp_iov == NULL) /* GCOVR_EXCL_BR_LINE */
+                        return -1; /* GCOVR_EXCL_LINE */
                 }
             }
             
@@ -745,11 +747,13 @@ _st_netfd_t *st_open(const char *path, int oflags, mode_t mode)
     }
     
     newfd = _st_netfd_new(osfd, 0, 0);
+    /* GCOVR_EXCL_START */
     if (!newfd) {
         err = errno;
         close(osfd);
         errno = err;
     }
+    /* GCOVR_EXCL_STOP */
     
     return newfd;
 }
