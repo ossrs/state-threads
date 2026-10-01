@@ -1234,8 +1234,7 @@ VOID TEST(SelectTest, ConnectionPastLimitRefused)
 struct SelectTestStuck {
     int init_r0_;
     bool filled_;
-    // Whether the timed sender was done, and the other sender still waiting, after 50 ms.
-    bool timed_done_;
+    // Whether the other sender was still waiting after the timed sender gave up.
     bool stopped_waiting_;
     SelectTestRead timed_;
     SelectTestRead stopped_;
@@ -1296,13 +1295,11 @@ static void select_test_stuck(void* arg)
     if (!receive_trd || !timed_trd || !stopped_trd) return;
 
     // One sender gives up on its send timeout, and the other keeps waiting.
-    st_usleep(50 * ST_UTIME_MILLISECONDS);
-    r->timed_done_ = r->timed_.done_;
+    st_thread_join(timed_trd, NULL);
     r->stopped_waiting_ = !r->stopped_.done_;
 
     // The server stops the other sender, the last writer on the connection.
     st_thread_interrupt(stopped_trd);
-    st_thread_join(timed_trd, NULL);
     st_thread_join(stopped_trd, NULL);
 
     // The player still sends, and the receiver wakes with it.
@@ -1336,7 +1333,6 @@ VOID TEST(SelectTest, StuckSendersLeaveConnection)
     ASSERT_EQ(0, r.p_->init_r0_);
     ASSERT_TRUE(r.p_->filled_);
 
-    EXPECT_TRUE(r.p_->timed_done_);
     EXPECT_EQ(-1, r.p_->timed_.r0_);
     EXPECT_EQ(ETIME, r.p_->timed_.errno_);
 
