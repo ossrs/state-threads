@@ -815,7 +815,7 @@ static void* select_test_after_bad_fd_coroutine(void* arg)
 {
     SelectTestAfterBadFd* c = (SelectTestAfterBadFd*)arg;
     errno = 0;
-    c->read_.r0_ = (int)st_read(c->stfd_, &c->read_.data_, 1, 30 * ST_UTIME_MILLISECONDS);
+    c->read_.r0_ = (int)st_read(c->stfd_, &c->read_.data_, 1, 200 * ST_UTIME_MILLISECONDS);
     c->read_.errno_ = errno;
     c->read_.done_ = true;
 
@@ -858,8 +858,8 @@ static void select_test_timer(void* arg)
     r->read_[0] = r->conn_.read_.done_;
     r->stopped_[0] = r->conn_.stopped_;
 
-    // 20 ms past the 30 ms the read would have timed out at.
-    st_usleep(30 * ST_UTIME_MILLISECONDS);
+    // 20 ms past the 200 ms the read would have timed out at.
+    st_usleep(200 * ST_UTIME_MILLISECONDS);
     r->read_[1] = r->conn_.read_.done_;
     r->stopped_[1] = r->conn_.stopped_;
 
@@ -871,7 +871,7 @@ static void select_test_timer(void* arg)
     ::close(fds[1]);
 }
 
-// A connection reads with a 30 ms timeout, and by mistake it is closed with close() after 10 ms while it waits. It
+// A connection reads with a 200 ms timeout, and by mistake it is closed with close() after 10 ms while it waits. It
 // wakes at once with EBADF, and then waits to be stopped, with no timeout. Its read timeout is cancelled when it wakes:
 // 20 ms after the read would have timed out, it is still waiting, where a stale timer would wake it with ETIME. It is stopped with a signal, and its wait returns 0.
 // Locks in current behavior.

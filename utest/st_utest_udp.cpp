@@ -5,6 +5,9 @@
 
 #include <st.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 #include <string.h>
 #include <string>
@@ -237,6 +240,81 @@ VOID TEST(IoUdpTest, RecvfromFailsWhenPeerRefuses)
     EXPECT_EQ(ECONNREFUSED, errno);
 }
 
+static volatile sig_atomic_t io_udp_signals = 0;
+
+static void io_udp_on_signal(int signo)
+{
+    io_udp_signals++;
+}
+
+// Another thread of the program signals the receiving thread a few times, then the player sends one datagram.
+struct IoTestUdpSignaler {
+    pthread_t target_;
+    IoTestUdpSocket* player_;
+    IoTestUdpSocket* server_;
+};
+
+static void* io_udp_signaler_thread(void* arg)
+{
+    IoTestUdpSignaler* s = (IoTestUdpSignaler*)arg;
+    for (int i = 0; i < 3; i++) {
+        usleep(5 * ST_UTIME_MILLISECONDS);
+        pthread_kill(s->target_, SIGUSR1);
+    }
+    usleep(5 * ST_UTIME_MILLISECONDS);
+    ::sendto(st_netfd_fileno(s->player_->stfd_), "hello", 5, 0, (sockaddr*)&s->server_->addr_, sizeof(s->server_->addr_));
+    return NULL;
+}
+
+// A signal interrupts recvfrom while it waits in the kernel, and the handler was installed without SA_RESTART, so
+// recvfrom fails with EINTR. st_recvfrom retries it instead of failing, because only st_thread_interrupt means the
+// listener should stop, and the retry returns the datagram the player sends later, with the player's address. ST's
+// sockets are non-blocking, so recvfrom returns at once and a signal almost never lands in it; recvfrom waits in the
+// kernel only when the socket lost O_NONBLOCK. The test clears the flag so recvfrom waits, and signals it on purpose.
+// Locks in current behavior.
+VOID TEST(IoUdpTest, RecvfromRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestUdpSocket server, player;
+    ASSERT_TRUE(io_udp_socket(server));
+    ASSERT_TRUE(io_udp_socket(player));
+
+    int fd = st_netfd_fileno(server.stfd_);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_udp_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestUdpSignaler s;
+    s.target_ = pthread_self();
+    s.player_ = &player;
+    s.server_ = &server;
+    io_udp_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_udp_signaler_thread, &s));
+
+    char buf[64] = {0};
+    struct sockaddr_in from;
+    int fromlen = sizeof(from);
+    errno = 0;
+    int nread = st_recvfrom(server.stfd_, buf, sizeof(buf), (sockaddr*)&from, &fromlen, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_udp_signals);
+    EXPECT_EQ(5, nread) << "errno=" << err;
+    EXPECT_STREQ("hello", buf);
+    EXPECT_EQ(player.addr_.sin_port, from.sin_port);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The utest for st_recvmsg and st_sendmsg: datagram I/O through a msghdr, which adds what st_recvfrom and st_sendto
 // can't do: scatter and gather buffers, control messages, and the flags the kernel reports for each datagram.
@@ -460,6 +538,56 @@ VOID TEST(IoUdpMsgTest, RecvmsgFailsWhenPeerRefuses)
     EXPECT_EQ(ECONNREFUSED, errno);
 }
 
+// The same signal interrupts recvmsg. st_recvmsg retries it, and the retry returns the datagram the player sends
+// later, with the player's address in msg_name. The test clears O_NONBLOCK so recvmsg waits in the kernel, as for
+// st_recvfrom. Locks in current behavior.
+VOID TEST(IoUdpMsgTest, RecvmsgRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestUdpSocket server, player;
+    ASSERT_TRUE(io_udp_socket(server));
+    ASSERT_TRUE(io_udp_socket(player));
+
+    int fd = st_netfd_fileno(server.stfd_);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_udp_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestUdpSignaler s;
+    s.target_ = pthread_self();
+    s.player_ = &player;
+    s.server_ = &server;
+    io_udp_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_udp_signaler_thread, &s));
+
+    char buf[64] = {0};
+    struct iovec iov;
+    struct msghdr msg;
+    io_msghdr(msg, iov, buf, sizeof(buf));
+    struct sockaddr_in from;
+    msg.msg_name = &from;
+    msg.msg_namelen = sizeof(from);
+    errno = 0;
+    int nread = st_recvmsg(server.stfd_, &msg, 0, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_udp_signals);
+    EXPECT_EQ(5, nread) << "errno=" << err;
+    EXPECT_STREQ("hello", buf);
+    EXPECT_EQ(player.addr_.sin_port, from.sin_port);
+}
+
 // The buffers of one datagram add up to more than UDP allows: st_sendmsg fails at once with EMSGSIZE instead of
 // waiting for the socket to become writable. Locks in current behavior.
 VOID TEST(IoUdpMsgTest, SendmsgOversizedDatagramFails)
@@ -541,6 +669,49 @@ VOID TEST(IoUdpMsgTest, SendmsgWaitsForFullQueue)
     st_thread_t reader = st_thread_create(io_consume_all_coroutine, &c, 1, 0);
     ASSERT_TRUE(reader != NULL);
     EXPECT_EQ(1000, st_sendmsg(producer.stfd_, &msg, 0, ST_UTEST_TIMEOUT));
+    st_thread_join(reader, NULL);
+    EXPECT_EQ(nsent, c.ndatagrams_);
+#else
+    EXPECT_EQ(ENOBUFS, errno);
+#endif
+}
+
+// The same full queue for st_sendto, the call SRS sends every RTP and RTCP packet with: a burst outruns the consumer.
+// The pair is connected, so the datagrams go without an address. On Linux, st_sendto fails with ETIME when nobody
+// reads, and waits until the consumer catches up; macOS fails with ENOBUFS at once. Locks in current behavior on each
+// OS.
+VOID TEST(IoUdpTest, SendtoWaitsForFullQueue)
+{
+    int fds[2];
+    ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_DGRAM, 0, fds));
+    IoTestUdpSocket producer, consumer;
+    producer.stfd_ = st_netfd_open_socket(fds[0]);
+    consumer.stfd_ = st_netfd_open_socket(fds[1]);
+    ASSERT_TRUE(producer.stfd_ != NULL);
+    ASSERT_TRUE(consumer.stfd_ != NULL);
+
+    char data[1000];
+    memset(data, 'x', sizeof(data));
+
+    // Fill the queue without waiting.
+    int nsent = 0;
+    while (st_sendto(producer.stfd_, data, sizeof(data), NULL, 0, 0) > 0) {
+        nsent++;
+    }
+    EXPECT_GT(nsent, 0);
+#ifdef __linux__
+    EXPECT_EQ(ETIME, errno);
+
+    errno = 0;
+    EXPECT_EQ(-1, st_sendto(producer.stfd_, data, sizeof(data), NULL, 0, 20 * ST_UTIME_MILLISECONDS));
+    EXPECT_EQ(ETIME, errno);
+
+    IoTestMsgConsumer c;
+    c.stfd_ = consumer.stfd_;
+    c.ndatagrams_ = 0;
+    st_thread_t reader = st_thread_create(io_consume_all_coroutine, &c, 1, 0);
+    ASSERT_TRUE(reader != NULL);
+    EXPECT_EQ(1000, st_sendto(producer.stfd_, data, sizeof(data), NULL, 0, ST_UTEST_TIMEOUT));
     st_thread_join(reader, NULL);
     EXPECT_EQ(nsent, c.ndatagrams_);
 #else

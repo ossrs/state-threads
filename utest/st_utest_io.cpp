@@ -6,6 +6,8 @@
 #include <st.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
@@ -450,6 +452,183 @@ VOID TEST(IoReadTest, ReadOnResetConnectionFails)
     }
 }
 
+static volatile sig_atomic_t io_read_signals = 0;
+
+static void io_read_on_signal(int signo)
+{
+    io_read_signals++;
+}
+
+// Another thread of the program signals the reading thread a few times, then the peer sends a message in one write.
+struct IoTestSignaler {
+    pthread_t target_;
+    int peer_fd_;
+    const char* msg_;
+};
+
+static void* io_signaler_thread(void* arg)
+{
+    IoTestSignaler* s = (IoTestSignaler*)arg;
+    for (int i = 0; i < 3; i++) {
+        usleep(5 * ST_UTIME_MILLISECONDS);
+        pthread_kill(s->target_, SIGUSR1);
+    }
+    usleep(5 * ST_UTIME_MILLISECONDS);
+    size_t size = strlen(s->msg_);
+    if (::write(s->peer_fd_, s->msg_, size) != (ssize_t)size) return NULL;
+    return NULL;
+}
+
+// A signal interrupts read while it waits in the kernel, and the handler was installed without SA_RESTART, so read
+// fails with EINTR. st_read retries it instead of failing, because only st_thread_interrupt means the reader should
+// stop, and the retry returns the byte the peer sends later. ST's sockets are non-blocking, so read returns at once and
+// a signal almost never lands in it; read waits in the kernel only when the descriptor lost O_NONBLOCK, for example
+// because another process sharing it after a fork cleared the flag. The test clears the flag so read waits, and signals
+// it on purpose. Locks in current behavior.
+VOID TEST(IoReadTest, ReadRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestSignaler s;
+    s.target_ = pthread_self();
+    s.peer_fd_ = st_netfd_fileno(pair.client_);
+    s.msg_ = "x";
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_signaler_thread, &s));
+
+    char c = 0;
+    errno = 0;
+    ssize_t nread = st_read(pair.server_, &c, 1, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ(1, nread) << "errno=" << err;
+    EXPECT_EQ('x', c);
+}
+
+// The same signal interrupts readv, the scatter read into a header and a payload buffer. st_readv retries it, and the
+// retry returns the byte the peer sends later in the first buffer. The test clears O_NONBLOCK so readv waits in the
+// kernel, as for st_read. Locks in current behavior.
+VOID TEST(IoReadTest, ReadvRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestSignaler s;
+    s.target_ = pthread_self();
+    s.peer_fd_ = st_netfd_fileno(pair.client_);
+    s.msg_ = "x";
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_signaler_thread, &s));
+
+    char header[4] = {0};
+    char payload[8] = {0};
+    struct iovec iovs[2];
+    iovs[0].iov_base = header;
+    iovs[0].iov_len = 3;
+    iovs[1].iov_base = payload;
+    iovs[1].iov_len = 7;
+
+    errno = 0;
+    ssize_t nread = st_readv(pair.server_, iovs, 2, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ(1, nread) << "errno=" << err;
+    EXPECT_STREQ("x", header);
+    EXPECT_STREQ("", payload);
+}
+
+// The same signal interrupts readv in st_readv_resid, which reads a whole message into a header and a payload buffer.
+// st_readv_resid retries it, and the retry fills both buffers with the message the peer sends later in one write, so
+// the iovec array is used up. The test clears O_NONBLOCK so readv waits in the kernel, as for st_read. Locks in current
+// behavior.
+VOID TEST(IoReadTest, ReadvResidRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestSignaler s;
+    s.target_ = pthread_self();
+    s.peer_fd_ = st_netfd_fileno(pair.client_);
+    s.msg_ = "hdrpayload";
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_signaler_thread, &s));
+
+    char header[4] = {0};
+    char payload[8] = {0};
+    struct iovec iovs[2];
+    iovs[0].iov_base = header;
+    iovs[0].iov_len = 3;
+    iovs[1].iov_base = payload;
+    iovs[1].iov_len = 7;
+
+    struct iovec* iov = iovs;
+    int iov_size = 2;
+    errno = 0;
+    int r0 = st_readv_resid(pair.server_, &iov, &iov_size, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ(0, r0) << "errno=" << err;
+    EXPECT_EQ(0, iov_size);
+    EXPECT_TRUE(iov == iovs + 2);
+    EXPECT_STREQ("hdr", header);
+    EXPECT_STREQ("payload", payload);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The utest for accepting and connecting TCP, the way an SRS listener accepts clients and an SRS edge or forwarder
 // connects to its origin.
@@ -614,6 +793,83 @@ VOID TEST(IoAcceptTest, AcceptOnSocketNotListeningFails)
     errno = 0;
     EXPECT_TRUE(st_accept(stfd, NULL, NULL, ST_UTIME_NO_TIMEOUT) == NULL);
     EXPECT_EQ(EINVAL, errno);
+}
+
+// Another thread of the program signals the accepting thread a few times, then a client connects.
+struct IoTestAcceptSignaler {
+    pthread_t target_;
+    struct sockaddr_in addr_;
+    int client_fd_;
+};
+
+static void* io_accept_signaler_thread(void* arg)
+{
+    IoTestAcceptSignaler* s = (IoTestAcceptSignaler*)arg;
+    for (int i = 0; i < 3; i++) {
+        usleep(20 * ST_UTIME_MILLISECONDS);
+        pthread_kill(s->target_, SIGUSR1);
+    }
+    usleep(20 * ST_UTIME_MILLISECONDS);
+    s->client_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (s->client_fd_ >= 0 && ::connect(s->client_fd_, (sockaddr*)&s->addr_, sizeof(s->addr_)) < 0) {
+        ::close(s->client_fd_);
+        s->client_fd_ = -1;
+    }
+    return NULL;
+}
+
+// A signal interrupts accept while it waits in the kernel, and the handler was installed without SA_RESTART, so accept
+// fails with EINTR. st_accept retries it instead of failing, because only st_thread_interrupt means the listener should
+// stop, and the retry accepts the client that connects later. ST's listener is non-blocking, so accept returns at once
+// and a signal almost never lands in it; accept waits in the kernel only when the listener lost O_NONBLOCK. The test
+// clears the flag so accept waits, and signals it on purpose. Locks in current behavior.
+VOID TEST(IoAcceptTest, AcceptRetriesWhenSignalInterruptsSystemCall)
+{
+    struct sockaddr_in addr;
+    st_netfd_t listener = io_tcp_listen(addr, 8);
+    ASSERT_TRUE(listener != NULL);
+    StStfdCleanup(listener);
+
+    int fd = st_netfd_fileno(listener);
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestAcceptSignaler s;
+    s.target_ = pthread_self();
+    s.addr_ = addr;
+    s.client_fd_ = -1;
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_accept_signaler_thread, &s));
+
+    errno = 0;
+    st_netfd_t client = st_accept(listener, NULL, NULL, ST_UTEST_TIMEOUT);
+    int err = errno;
+    StStfdCleanup(client);
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+    int cfd = s.client_fd_;
+    st_netfd_t cstfd = NULL;
+    StFdCleanup(cfd, cstfd);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    ASSERT_TRUE(client != NULL) << "errno=" << err;
+    ASSERT_NE(-1, cfd);
+
+    char buf[6] = {0};
+    ASSERT_EQ(5, ::write(cfd, "hello", 5));
+    EXPECT_EQ(5, st_read_fully(client, buf, 5, ST_UTEST_TIMEOUT));
+    EXPECT_STREQ("hello", buf);
 }
 
 // Open a TCP socket for st_connect.
@@ -918,6 +1174,267 @@ VOID TEST(IoWriteTest, WritevInterruptedWhenConnectionStops)
 
     EXPECT_EQ(-1, w.nwrite_);
     EXPECT_EQ(EINTR, w.errno_);
+}
+
+// Another thread of the program signals the writing thread a few times, then reads everything as the player.
+struct IoTestWriteSignaler {
+    pthread_t target_;
+    int player_fd_;
+    size_t expect_;
+    std::string received_;
+};
+
+static void* io_write_signaler_thread(void* arg)
+{
+    IoTestWriteSignaler* s = (IoTestWriteSignaler*)arg;
+    for (int i = 0; i < 3; i++) {
+        usleep(5 * ST_UTIME_MILLISECONDS);
+        pthread_kill(s->target_, SIGUSR1);
+    }
+    usleep(5 * ST_UTIME_MILLISECONDS);
+
+    char buf[4096];
+    while (s->received_.size() < s->expect_) {
+        struct pollfd pfd;
+        pfd.fd = s->player_fd_;
+        pfd.events = POLLIN;
+        if (::poll(&pfd, 1, 1000) <= 0) break;
+        ssize_t n = ::read(s->player_fd_, buf, sizeof(buf));
+        if (n < 0 && errno == EAGAIN) continue;
+        if (n <= 0) break;
+        s->received_.append(buf, n);
+    }
+    return NULL;
+}
+
+// Write to the non-blocking socket until the send buffer and the player's receive buffer are full and the kernel takes
+// no more, and keep what was written. The kernel moves the send buffer to the player in the background, so the first
+// EAGAIN may leave room a moment later: on macOS each round moves only one send buffer, and on Linux a delayed ACK
+// frees room up to 40 ms later. So keep writing after a short pause while room keeps appearing, and stop only when a
+// pause longer than a delayed ACK frees no more. Fill the last bytes one at a time, or a later write that fits in the
+// room left would be sent without waiting.
+static bool io_fill_buffers(int fd, std::string& filled)
+{
+    char chunk[4096];
+    memset(chunk, 'f', sizeof(chunk));
+    bool settling = false;
+    for (;;) {
+        size_t size = filled.size();
+        size_t sizes[] = {sizeof(chunk), 1};
+        for (int i = 0; i < 2; i++) {
+            ssize_t n;
+            while ((n = ::write(fd, chunk, sizes[i])) > 0) {
+                filled.append(chunk, n);
+            }
+            if (n == 0 || errno != EAGAIN) return false;
+        }
+        if (filled.size() == size && settling) return true;
+        settling = filled.size() == size;
+        usleep((settling ? 50 : 1) * ST_UTIME_MILLISECONDS);
+    }
+}
+
+// A signal interrupts writev while it waits in the kernel for a stalled player, and the handler was installed without
+// SA_RESTART, so writev fails with EINTR. st_writev retries it instead of failing, because only st_thread_interrupt
+// means the writer should stop, and every byte arrives once the player reads. A blocking writev fails with EINTR only
+// if it sent nothing yet, so the test first fills the send and receive buffers while the socket is non-blocking, then
+// clears O_NONBLOCK so writev waits in the kernel, and signals it on purpose. Locks in current behavior.
+VOID TEST(IoWriteTest, WritevRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_TRUE(io_shrink_send_buffer(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    std::string filled;
+    ASSERT_TRUE(io_fill_buffers(fd, filled));
+
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestMessages msgs(1, 1000);
+    IoTestWriteSignaler s;
+    s.target_ = pthread_self();
+    s.player_fd_ = st_netfd_fileno(pair.client_);
+    s.expect_ = filled.size() + msgs.data_.size();
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_write_signaler_thread, &s));
+
+    errno = 0;
+    ssize_t nwrite = st_writev(pair.server_, &msgs.iovs_[0], msgs.iovs_.size(), ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ((ssize_t)msgs.data_.size(), nwrite) << "errno=" << err;
+    ASSERT_EQ(s.expect_, s.received_.size());
+    EXPECT_TRUE(s.received_.substr(0, filled.size()) == filled);
+    EXPECT_TRUE(s.received_.substr(filled.size()) == msgs.data_);
+}
+
+// The same signal interrupts writev in st_writev_resid while the player is stalled. st_writev_resid retries it, sends
+// the whole message once the player reads, and leaves the caller's iovec array used up. The test fills the buffers and
+// clears O_NONBLOCK, as for st_writev. Locks in current behavior.
+VOID TEST(IoWriteTest, WritevResidRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_TRUE(io_shrink_send_buffer(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    std::string filled;
+    ASSERT_TRUE(io_fill_buffers(fd, filled));
+
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestMessages msgs(1, 1000);
+    IoTestWriteSignaler s;
+    s.target_ = pthread_self();
+    s.player_fd_ = st_netfd_fileno(pair.client_);
+    s.expect_ = filled.size() + msgs.data_.size();
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_write_signaler_thread, &s));
+
+    struct iovec* iov = &msgs.iovs_[0];
+    int iov_size = (int)msgs.iovs_.size();
+    errno = 0;
+    int r0 = st_writev_resid(pair.server_, &iov, &iov_size, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ(0, r0) << "errno=" << err;
+    EXPECT_EQ(0, iov_size);
+    ASSERT_EQ(s.expect_, s.received_.size());
+    EXPECT_TRUE(s.received_.substr(0, filled.size()) == filled);
+    EXPECT_TRUE(s.received_.substr(filled.size()) == msgs.data_);
+}
+
+// The same signal interrupts sendto while it waits for a stalled peer. st_sendto retries it, and the message arrives
+// once the peer reads. The test sends on the connected TCP pair with no address, because a datagram socket can't
+// wait for room on every OS: macOS fails a full local datagram queue with ENOBUFS even when the socket blocks. It
+// fills the buffers and clears O_NONBLOCK, as for st_writev. Locks in current behavior.
+VOID TEST(IoWriteTest, SendtoRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_TRUE(io_shrink_send_buffer(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    std::string filled;
+    ASSERT_TRUE(io_fill_buffers(fd, filled));
+
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    std::string data(1000, 'd');
+    IoTestWriteSignaler s;
+    s.target_ = pthread_self();
+    s.player_fd_ = st_netfd_fileno(pair.client_);
+    s.expect_ = filled.size() + data.size();
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_write_signaler_thread, &s));
+
+    errno = 0;
+    int nwrite = st_sendto(pair.server_, data.data(), (int)data.size(), NULL, 0, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ((int)data.size(), nwrite) << "errno=" << err;
+    ASSERT_EQ(s.expect_, s.received_.size());
+    EXPECT_TRUE(s.received_.substr(0, filled.size()) == filled);
+    EXPECT_TRUE(s.received_.substr(filled.size()) == data);
+}
+
+// The same signal interrupts sendmsg while it waits for a stalled peer. st_sendmsg retries it, and the header and
+// payload buffers arrive as one message once the peer reads. Like st_sendto, the test uses the connected TCP pair,
+// because macOS never makes a datagram send wait. Locks in current behavior.
+VOID TEST(IoWriteTest, SendmsgRetriesWhenSignalInterruptsSystemCall)
+{
+    IoTestTcpPair pair;
+    ASSERT_TRUE(io_tcp_pair(pair));
+    ASSERT_TRUE(io_shrink_send_buffer(pair));
+
+    int fd = st_netfd_fileno(pair.server_);
+    std::string filled;
+    ASSERT_TRUE(io_fill_buffers(fd, filled));
+
+    int flags = fcntl(fd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(fd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestMessages msgs(1, 1000);
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &msgs.iovs_[0];
+    msg.msg_iovlen = (int)msgs.iovs_.size();
+
+    IoTestWriteSignaler s;
+    s.target_ = pthread_self();
+    s.player_fd_ = st_netfd_fileno(pair.client_);
+    s.expect_ = filled.size() + msgs.data_.size();
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_write_signaler_thread, &s));
+
+    errno = 0;
+    int nwrite = st_sendmsg(pair.server_, &msg, 0, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(fd, F_SETFL, flags);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ((int)msgs.data_.size(), nwrite) << "errno=" << err;
+    ASSERT_EQ(s.expect_, s.received_.size());
+    EXPECT_TRUE(s.received_.substr(0, filled.size()) == filled);
+    EXPECT_TRUE(s.received_.substr(filled.size()) == msgs.data_);
 }
 
 // st_writev_resid keeps the count that st_writev loses. When the stalled player makes it time out, the caller's iovec

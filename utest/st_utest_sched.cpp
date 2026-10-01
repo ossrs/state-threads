@@ -7,11 +7,16 @@
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include <sys/socket.h>
+#include <sys/wait.h>
 
 #define ST_UTIME_MILLISECONDS 1000
 #define ST_UTEST_TIMEOUT (100 * ST_UTIME_MILLISECONDS)
@@ -1256,4 +1261,159 @@ VOID TEST(InitTest, SecondInitKeepsWaitingCoroutines)
     EXPECT_EQ(0, st_thread_join(reader, NULL));
     EXPECT_EQ(1, r.nread_);
     EXPECT_EQ('x', r.data_);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for a program that ends when its last coroutine ends, the classic ST server: main starts the workers, then
+// calls st_thread_exit instead of returning, and the process exits with status 0 once the last coroutine terminates.
+// The exit ends the process, so each test runs the program on a new OS thread with its own ST in a forked child, and
+// reads the child's exit status and what it printed.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void* exit_test_thread(void* arg)
+{
+    void (*program)() = (void (*)())arg;
+
+    if (st_set_eventsys(ST_EVENTSYS_ALT) < 0) _exit(1);
+    if (st_init() < 0) _exit(1);
+
+    // The program's main ends with st_thread_exit, so it never returns here.
+    program();
+    _exit(2);
+    return NULL;
+}
+
+// Runs program as the main of a new OS thread in a forked child, and returns the child's exit status, or -1 if it
+// didn't exit, with what the child printed to stdout.
+static int exit_test_run(void (*program)(), std::string& out)
+{
+    fflush(stdout);
+    fflush(stderr);
+
+    int fds[2];
+    if (pipe(fds) < 0) return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        // A hang kills the child and fails the test, instead of hanging the suite.
+        alarm(5);
+
+        // The printed lines go to the parent, and stay buffered in the child until it flushes or exits.
+        ::close(fds[0]);
+        if (dup2(fds[1], STDOUT_FILENO) < 0) _exit(1);
+        ::close(fds[1]);
+
+        pthread_t trd;
+        if (pthread_create(&trd, NULL, exit_test_thread, (void*)program) != 0) _exit(1);
+
+        // Only the program's exit ends the child.
+        pthread_join(trd, NULL);
+        _exit(3);
+    }
+
+    ::close(fds[1]);
+    char buf[256];
+    ssize_t nn;
+    while ((nn = ::read(fds[0], buf, sizeof(buf))) > 0) {
+        out.append(buf, nn);
+    }
+    ::close(fds[0]);
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid) return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static void* exit_test_worker_coroutine(void* arg)
+{
+    int id = (int)(long)arg;
+    st_usleep(id * 10 * ST_UTIME_MILLISECONDS);
+    printf("served %d\n", id);
+    return NULL;
+}
+
+static void exit_test_server()
+{
+    for (int id = 1; id <= 3; id++) {
+        if (!st_thread_create(exit_test_worker_coroutine, (void*)(long)id, 0, 0)) _exit(1);
+    }
+    st_thread_exit(NULL);
+}
+
+// A server's main starts three workers, which serve for 10, 20 and 30 ms, then calls st_thread_exit. Main never runs
+// again, the workers go on, and the process exits with status 0 after the last one. Because ST exits with exit(), not
+// _exit(), the lines the workers printed reach stdout. Locks in current behavior.
+VOID TEST(ExitTest, ProcessExitsAfterLastWorker)
+{
+    std::string out;
+    EXPECT_EQ(0, exit_test_run(exit_test_server, out));
+    EXPECT_EQ("served 1\nserved 2\nserved 3\n", out);
+}
+
+static void* exit_test_finished_coroutine(void* arg)
+{
+    printf("finished\n");
+    return NULL;
+}
+
+static void exit_test_unjoined()
+{
+    if (!st_thread_create(exit_test_finished_coroutine, NULL, 1, 0)) _exit(1);
+    if (!st_thread_create(exit_test_worker_coroutine, (void*)(long)1, 0, 0)) _exit(1);
+    st_thread_exit(NULL);
+}
+
+// Main starts a joinable coroutine that finishes at once, and a worker that serves for 10 ms, then exits without
+// joining the first. The finished coroutine waits as a zombie for a join that never comes, but it has terminated, so
+// the process exits with status 0 when the worker ends. Locks in current behavior.
+VOID TEST(ExitTest, UnjoinedCoroutineDoesNotKeepProcessAlive)
+{
+    std::string out;
+    EXPECT_EQ(0, exit_test_run(exit_test_unjoined, out));
+    EXPECT_EQ("finished\nserved 1\n", out);
+}
+
+static void* exit_test_reader_coroutine(void* arg)
+{
+    st_netfd_t stfd = (st_netfd_t)arg;
+    char data = 0;
+    if (st_read(stfd, &data, 1, ST_UTIME_NO_TIMEOUT) != 1) return NULL;
+    printf("got %c\n", data);
+    return NULL;
+}
+
+static void* exit_test_client_thread(void* arg)
+{
+    int fd = (int)(long)arg;
+    usleep(20 * 1000);
+    if (::write(fd, "a", 1) != 1) _exit(1);
+    return NULL;
+}
+
+static void exit_test_waiting_reader()
+{
+    int fds[2];
+    if (pipe(fds) < 0) _exit(1);
+    st_netfd_t stfd = st_netfd_open(fds[0]);
+    if (!stfd) _exit(1);
+    if (!st_thread_create(exit_test_reader_coroutine, stfd, 0, 0)) _exit(1);
+
+    // The request comes from another OS thread, so no coroutine is on a timer while the reader waits.
+    pthread_t client;
+    if (pthread_create(&client, NULL, exit_test_client_thread, (void*)(long)fds[1]) != 0) _exit(1);
+
+    st_thread_exit(NULL);
+}
+
+// Main starts a reader that waits for a request with no timeout, then exits. With no coroutine runnable or on a timer,
+// ST waits for I/O with no timeout instead of exiting, since the reader hasn't terminated. The request arrives 20 ms
+// later from another OS thread, the reader prints it and ends, and the process exits with status 0. Locks in current
+// behavior.
+VOID TEST(ExitTest, WaitingReaderKeepsProcessAlive)
+{
+    std::string out;
+    EXPECT_EQ(0, exit_test_run(exit_test_waiting_reader, out));
+    EXPECT_EQ("got a\n", out);
 }

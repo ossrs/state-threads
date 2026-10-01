@@ -140,8 +140,10 @@ void st_netfd_free(_st_netfd_t *fd)
         return;
 
     fd->inuse = 0;
+    /* GCOVR_EXCL_START */
     if (fd->aux_data)
         _st_netfd_free_aux_data(fd);
+    /* GCOVR_EXCL_STOP */
     if (fd->private_data && fd->destructor)
         (*(fd->destructor))(fd->private_data);
     fd->private_data = NULL;
@@ -269,11 +271,13 @@ int st_netfd_serialize_accept(_st_netfd_t *fd)
     return 0;
 }
 
-/* No-op */
+/* No-op. */
+/* GCOVR_EXCL_START */
 static void _st_netfd_free_aux_data(_st_netfd_t *fd)
 {
     fd->aux_data = NULL;
 }
+/* GCOVR_EXCL_STOP */
 
 _st_netfd_t *st_accept(_st_netfd_t *fd, struct sockaddr *addr, int *addrlen, st_utime_t timeout)
 {
