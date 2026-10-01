@@ -95,7 +95,8 @@ _st_stack_t *_st_stack_new(int stack_size)
 
 #if defined(DEBUG) && !defined(MD_NO_PROTECT)
         mprotect(ts->vaddr, REDZONE, PROT_READ | PROT_WRITE);
-        mprotect(ts->stk_top + extra, REDZONE, PROT_READ | PROT_WRITE);
+        /* The upper red zone ends the segment; stk_top may be randomized, and extra may have changed since. */
+        mprotect(ts->vaddr + ts->vaddr_size - REDZONE, REDZONE, PROT_READ | PROT_WRITE);
 #endif
 
         _st_delete_stk_segment(ts->vaddr, ts->vaddr_size);

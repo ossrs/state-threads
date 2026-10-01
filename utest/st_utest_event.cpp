@@ -198,7 +198,9 @@ VOID TEST(PollRefusedTest, StdinFromFileFailsAtOnce)
     st_utime_t starttime = st_utime();
     errno = 0;
     int r0 = st_poll(pds, 2, ST_UTEST_TIMEOUT);
+#if defined(__linux__)
     int err = errno;
+#endif
     EXPECT_LT(st_utime() - starttime, ST_UTEST_TIMEOUT);
 #if defined(__linux__)
     EXPECT_EQ(-1, r0);
@@ -294,8 +296,8 @@ VOID TEST(PollRefusedTest, ReaderOnSameConnectionKeepsWaiting)
     pds[1].revents = 0;
     errno = 0;
     int r0 = st_poll(pds, 2, ST_UTEST_TIMEOUT);
-    int err = errno;
 #if defined(__linux__)
+    int err = errno;
     EXPECT_EQ(-1, r0);
     EXPECT_EQ(EPERM, err);
 #else
