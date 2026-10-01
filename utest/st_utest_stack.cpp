@@ -6,10 +6,13 @@
 #include <st.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <vector>
 
 #define ST_UTIME_MILLISECONDS 1000
@@ -41,12 +44,18 @@ static void* stack_test_record_coroutine(void* arg)
     return NULL;
 }
 
-// Whether the byte at p can be read. write reports EFAULT for an unreadable page instead of faulting.
+// Whether the byte at p can be read. write reports EFAULT for an unreadable page instead of faulting. On Linux it
+// calls the system call directly, because ASAN checks the buffer of write, and p may be heap memory just past a stack
+// that MALLOC_STACK allocated.
 static bool stack_test_readable(uintptr_t p)
 {
     int fds[2];
     if (pipe(fds) < 0) return true;
+#if defined(__linux__)
+    bool readable = syscall(SYS_write, fds[1], (void*)p, 1) == 1;
+#else
     bool readable = ::write(fds[1], (void*)p, 1) == 1;
+#endif
     ::close(fds[0]);
     ::close(fds[1]);
     return readable;
@@ -267,4 +276,84 @@ VOID TEST(RandomizeStacksTest, FreeingRestoresTheGuardPagesCreationProtected)
             }
         }
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for describing the main thread's stack to AddressSanitizer. ST runs the main thread as its primordial
+// coroutine on the stack the OS gave it, not on a stack ST allocated, so in an MD_ASAN build ST doesn't know where that
+// stack is when it tells ASAN about a switch back to the main thread. A program built with ASAN calls
+// st_set_primordial_stack(top, bottom) once in main(), as SRS does in its sanitizer build, and ST passes that range to
+// ASAN on every switch back to the main thread. Without MD_ASAN, ST only stores the range.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// The main thread's stack as ST stores it, private to ST: its lowest address and its size.
+extern "C" {
+extern void* _st_primordial_stack_bottom;
+extern size_t _st_primordial_stack_size;
+}
+
+// The stack of the calling OS thread, from its lowest to its highest address.
+static void stack_test_thread_stack(char** bottom, char** top)
+{
+#ifdef __APPLE__
+    pthread_t self = pthread_self();
+    *top = (char*)pthread_get_stackaddr_np(self);
+    *bottom = *top - pthread_get_stacksize_np(self);
+#else
+    void* addr = NULL;
+    size_t size = 0;
+    pthread_attr_t attr;
+    pthread_getattr_np(pthread_self(), &attr);
+    pthread_attr_getstack(&attr, &addr, &size);
+    pthread_attr_destroy(&attr);
+    *bottom = (char*)addr;
+    *top = *bottom + size;
+#endif
+}
+
+// A coroutine that counts its turns, each time the main thread yields to it.
+static void* stack_test_count_turns(void* arg)
+{
+    int* turns = (int*)arg;
+    for (int i = 0; i < 3; i++) {
+        (*turns)++;
+        st_thread_yield();
+    }
+    return NULL;
+}
+
+// A sanitizer build describes the main thread's whole stack, from its top down to its lowest address. ST stores the
+// lowest address and the size, then the main thread switches to a coroutine and back three times, and finds its own
+// data on its stack unchanged each time. Locks in current behavior.
+VOID TEST(PrimordialStackTest, DescribesTheMainThreadStack)
+{
+    void* saved_bottom = _st_primordial_stack_bottom;
+    size_t saved_size = _st_primordial_stack_size;
+
+    char* bottom = NULL;
+    char* top = NULL;
+    stack_test_thread_stack(&bottom, &top);
+    char* frame = (char*)__builtin_frame_address(0);
+    ASSERT_TRUE(bottom < frame && frame < top);
+
+    st_set_primordial_stack(top, bottom);
+    EXPECT_EQ((void*)bottom, _st_primordial_stack_bottom);
+    EXPECT_EQ((size_t)(top - bottom), _st_primordial_stack_size);
+
+    char data[4096];
+    memset(data, 0x5a, sizeof(data));
+
+    int turns = 0;
+    st_thread_t worker = st_thread_create(stack_test_count_turns, &turns, 1, ST_STACK_TEST_SIZE);
+    ASSERT_TRUE(worker != NULL);
+    for (int i = 1; i <= 3; i++) {
+        st_thread_yield();
+        EXPECT_EQ(i, turns);
+        for (int j = 0; j < (int)sizeof(data); j++) {
+            ASSERT_EQ(0x5a, (unsigned char)data[j]) << "turn " << i << ", byte " << j;
+        }
+    }
+    EXPECT_EQ(0, st_thread_join(worker, NULL));
+
+    st_set_primordial_stack((char*)saved_bottom + saved_size, saved_bottom);
 }

@@ -986,3 +986,235 @@ VOID TEST(SelectTest, ClosedInPollSetIsReported)
     EXPECT_EQ(r.p_->conn_fd_, r.p_->next_fd_);
     EXPECT_EQ(0, r.p_->next_close_r0_);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for the descriptors a select server can serve: only numbers below FD_SETSIZE, the size of select's fd
+// sets. Its st_init lowers the process's descriptor limit to FD_SETSIZE, so the kernel itself refuses the descriptor
+// past the limit, and ST refuses one numbered FD_SETSIZE or above that was opened before st_init.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct SelectTestHighFd {
+    bool skipped_;
+    int init_r0_;
+    // The descriptor opened before st_init at FD_SETSIZE: st_netfd_open refuses it, and it stays open.
+    bool refused_;
+    int refused_errno_;
+    bool still_open_;
+    // The one at FD_SETSIZE - 1 is served: a reader waits on it and wakes on its data.
+    SelectTestRead last_;
+    int last_close_r0_;
+    // The high one moved below FD_SETSIZE with dup is served too.
+    int moved_fd_;
+    SelectTestRead moved_;
+    int moved_close_r0_;
+};
+
+// Serves the read end of a pipe with st_netfd_open: a reader waits for one byte, which arrives 10 ms later.
+static int select_test_serve_pipe(int osfd, int wfd, SelectTestRead* result)
+{
+    st_netfd_t stfd = st_netfd_open(osfd);
+    if (!stfd) return -1;
+
+    SelectTestReader reader = {stfd, SELECT_TEST_TIMEOUT, result};
+    st_thread_t trd = st_thread_create(select_test_reader_coroutine, &reader, 1, 0);
+    if (!trd) return -1;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    if (::write(wfd, "a", 1) != 1) return -1;
+    st_thread_join(trd, NULL);
+
+    return st_netfd_close(stfd);
+}
+
+static void select_test_high_fd(void* arg)
+{
+    SelectTestHighFd* r = (SelectTestHighFd*)arg;
+
+    // The program may open FD_SETSIZE + 1 descriptors before it starts ST.
+    struct rlimit rlim;
+    if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) return;
+    if (rlim.rlim_max != RLIM_INFINITY && rlim.rlim_max < (rlim_t)FD_SETSIZE + 1) {
+        r->skipped_ = true;
+        return;
+    }
+    rlim.rlim_cur = FD_SETSIZE + 1;
+    if (setrlimit(RLIMIT_NOFILE, &rlim) < 0) return;
+
+    int high[2], last[2];
+    if (pipe(high) < 0 || pipe(last) < 0) return;
+    if (dup2(high[0], FD_SETSIZE) != FD_SETSIZE || dup2(last[0], FD_SETSIZE - 1) != FD_SETSIZE - 1) return;
+    ::close(high[0]);
+    ::close(last[0]);
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+
+    errno = 0;
+    r->refused_ = st_netfd_open(FD_SETSIZE) == NULL;
+    r->refused_errno_ = errno;
+    r->still_open_ = fcntl(FD_SETSIZE, F_GETFD) >= 0;
+
+    r->last_close_r0_ = select_test_serve_pipe(FD_SETSIZE - 1, last[1], &r->last_);
+
+    r->moved_fd_ = dup(FD_SETSIZE);
+    ::close(FD_SETSIZE);
+    r->moved_close_r0_ = select_test_serve_pipe(r->moved_fd_, high[1], &r->moved_);
+
+    ::close(high[1]);
+    ::close(last[1]);
+}
+
+// A program opens a descriptor numbered FD_SETSIZE before it starts ST on select, such as a listener inherited from
+// its parent. Select can't watch it, so st_netfd_open fails with EMFILE, and leaves the descriptor open. The descriptor
+// just below, FD_SETSIZE - 1, is served: a reader waits on it and wakes on its data, then it closes. The program moves
+// the high descriptor below FD_SETSIZE with dup, since st_init lowered the limit, and serves it the same way. Locks in
+// current behavior.
+VOID TEST(SelectTest, DescriptorAboveSetSizeRefused)
+{
+    SelectTestShared<SelectTestHighFd> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->last_close_r0_ = r.p_->moved_close_r0_ = 1;
+    r.p_->moved_fd_ = -1;
+    ASSERT_EQ(0, select_test_run(select_test_high_fd, r.p_));
+    if (r.p_->skipped_) GTEST_SKIP() << "descriptor limit too low for descriptor " << FD_SETSIZE;
+    ASSERT_EQ(0, r.p_->init_r0_);
+
+    EXPECT_TRUE(r.p_->refused_);
+    EXPECT_EQ(EMFILE, r.p_->refused_errno_);
+    EXPECT_TRUE(r.p_->still_open_);
+
+    EXPECT_TRUE(r.p_->last_.done_);
+    EXPECT_EQ(1, r.p_->last_.r0_);
+    EXPECT_EQ('a', r.p_->last_.data_);
+    EXPECT_EQ(0, r.p_->last_close_r0_);
+
+    EXPECT_GE(r.p_->moved_fd_, 0);
+    EXPECT_LT(r.p_->moved_fd_, FD_SETSIZE);
+    EXPECT_TRUE(r.p_->moved_.done_);
+    EXPECT_EQ(1, r.p_->moved_.r0_);
+    EXPECT_EQ('a', r.p_->moved_.data_);
+    EXPECT_EQ(0, r.p_->moved_close_r0_);
+}
+
+struct SelectTestFull {
+    int init_r0_;
+    int fdlimit_;
+    bool filled_;
+    // The accept with every descriptor in use, and how long it took.
+    bool refused_;
+    int refused_errno_;
+    st_utime_t refused_us_;
+    // What the refused client sees afterwards.
+    int refused_client_r0_;
+    int refused_client_errno_;
+    // The accept after two descriptors were freed and a late client connected.
+    int accepted_fd_;
+    int read_r0_;
+    char data_;
+    int close_r0_;
+    int listener_close_r0_;
+};
+
+static void select_test_full(void* arg)
+{
+    SelectTestFull* r = (SelectTestFull*)arg;
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+    r->fdlimit_ = st_getfdlimit();
+
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) return;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t addrlen = sizeof(addr);
+    if (::bind(lfd, (sockaddr*)&addr, sizeof(addr)) < 0 || ::listen(lfd, 8) < 0
+        || getsockname(lfd, (sockaddr*)&addr, &addrlen) < 0) {
+        return;
+    }
+    st_netfd_t listener = st_netfd_open_socket(lfd);
+    if (!listener) return;
+
+    // A client connects and sends its request; it waits in the accept queue.
+    int client = socket(AF_INET, SOCK_STREAM, 0);
+    if (client < 0 || ::connect(client, (sockaddr*)&addr, sizeof(addr)) < 0) return;
+    if (::write(client, "a", 1) != 1) return;
+
+    // Every other descriptor is in use, by earlier connections and files.
+    int fillers[FD_SETSIZE];
+    int nn = 0;
+    while (nn < FD_SETSIZE && (fillers[nn] = dup(client)) >= 0) nn++;
+    r->filled_ = nn < FD_SETSIZE && errno == EMFILE;
+
+    st_utime_t starttime = st_utime();
+    errno = 0;
+    r->refused_ = st_accept(listener, NULL, NULL, SELECT_TEST_TIMEOUT) == NULL;
+    r->refused_errno_ = errno;
+    r->refused_us_ = st_utime() - starttime;
+
+    // A reset reaches the client asynchronously, so it waits a little for one.
+    struct pollfd pd = {client, POLLIN, 0};
+    ::poll(&pd, 1, 100);
+    char c = 0;
+    errno = 0;
+    r->refused_client_r0_ = (int)recv(client, &c, 1, MSG_DONTWAIT);
+    r->refused_client_errno_ = errno;
+
+    // Two connections close, and a late client connects on one of their descriptors and sends its request.
+    for (int i = 0; i < 2 && nn > 0; i++) ::close(fillers[--nn]);
+    int late = socket(AF_INET, SOCK_STREAM, 0);
+    if (late < 0 || ::connect(late, (sockaddr*)&addr, sizeof(addr)) < 0) return;
+    if (::write(late, "b", 1) != 1) return;
+
+    st_netfd_t conn = st_accept(listener, NULL, NULL, SELECT_TEST_TIMEOUT);
+    if (conn) {
+        r->accepted_fd_ = st_netfd_fileno(conn);
+        r->read_r0_ = (int)st_read(conn, &r->data_, 1, SELECT_TEST_TIMEOUT);
+        r->close_r0_ = st_netfd_close(conn);
+    }
+
+    while (nn > 0) ::close(fillers[--nn]);
+    r->listener_close_r0_ = st_netfd_close(listener);
+    ::close(client);
+    ::close(late);
+}
+
+// A select server already has a descriptor open for every number below its limit, FD_SETSIZE, when one more client
+// connects. The kernel refuses the new descriptor, so st_accept fails at once with EMFILE instead of waiting. On Linux
+// the client stays in the accept queue. On macOS the kernel takes it off the queue and resets it, so the client gets
+// ECONNRESET. After two connections close and a late client connects, the next st_accept gets the oldest waiting
+// client with its request: the refused one on Linux, the late one on macOS. Locks in current behavior.
+VOID TEST(SelectTest, ConnectionPastLimitRefused)
+{
+    SelectTestShared<SelectTestFull> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->close_r0_ = r.p_->listener_close_r0_ = 1;
+    r.p_->accepted_fd_ = -1;
+    ASSERT_EQ(0, select_test_run(select_test_full, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+    ASSERT_LE(r.p_->fdlimit_, FD_SETSIZE);
+    ASSERT_TRUE(r.p_->filled_);
+
+    EXPECT_TRUE(r.p_->refused_);
+    EXPECT_EQ(EMFILE, r.p_->refused_errno_);
+    EXPECT_LT(r.p_->refused_us_, 100 * ST_UTIME_MILLISECONDS);
+
+    EXPECT_EQ(-1, r.p_->refused_client_r0_);
+#if defined(__APPLE__)
+    EXPECT_EQ(ECONNRESET, r.p_->refused_client_errno_);
+#else
+    EXPECT_EQ(EAGAIN, r.p_->refused_client_errno_);
+#endif
+
+    EXPECT_GE(r.p_->accepted_fd_, 0);
+    EXPECT_LT(r.p_->accepted_fd_, FD_SETSIZE);
+    EXPECT_EQ(1, r.p_->read_r0_);
+#if defined(__APPLE__)
+    EXPECT_EQ('b', r.p_->data_);
+#else
+    EXPECT_EQ('a', r.p_->data_);
+#endif
+    EXPECT_EQ(0, r.p_->close_r0_);
+    EXPECT_EQ(0, r.p_->listener_close_r0_);
+}

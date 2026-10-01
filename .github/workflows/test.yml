@@ -5,8 +5,15 @@ on: [push, pull_request]
 
 jobs:
   utest:
-    name: actions-test-utest
-    runs-on: ubuntu-24.04
+    name: actions-test-utest-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-24.04, target: linux-debug-utest }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, target: linux-debug-utest }
+          - { name: darwin-arm64, os: macos-latest, target: darwin-debug-utest }
 
     steps:
       - name: Checkout repository
@@ -15,7 +22,7 @@ jobs:
       ################################################################
       # Tests
       - name: Run ST utest
-        run: make linux-debug-utest && ./obj/st_utest
+        run: make ${{ matrix.target }} && ./obj/st_utest
 
   coverage:
     name: actions-test-coverage
