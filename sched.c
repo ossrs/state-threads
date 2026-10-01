@@ -380,7 +380,10 @@ void _st_thread_main(void)
      * to stop unwinding the stack. It's a no-op on most platforms.
      */
     MD_CAP_STACK(&thread);
-    
+
+    /* The first run starts here, not in _st_switch_context, so call the switch-in callback here too. */
+    ST_SWITCH_IN_CB(thread);
+
     /* Run thread main */
     thread->retval = (*thread->start)(thread->arg);
     

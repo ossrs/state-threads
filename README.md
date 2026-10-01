@@ -3,7 +3,6 @@
 ![](http://ossrs.net:8000/gif/v1/sls.gif?site=github.com&path=/srs/srsst)
 [![](https://github.com/ossrs/state-threads/actions/workflows/test.yml/badge.svg?branch=srs)](https://github.com/ossrs/state-threads/actions?query=workflow%3ATest+branch%3Asrs)
 [![](https://codecov.io/gh/ossrs/state-threads/branch/srs/graph/badge.svg)](https://codecov.io/gh/ossrs/state-threads/branch/srs)
-[![](https://cloud.githubusercontent.com/assets/2777660/22814959/c51cbe72-ef92-11e6-81cc-32b657b285d5.png)](https://ossrs.net/lts/zh-cn/contact)
 
 Fork from http://sourceforge.net/projects/state-threads, patched for [SRS](https://github.com/ossrs/srs/tree/2.0release).
 
@@ -215,13 +214,5 @@ bash auto/coverage.sh
 * About the scheduler, read [#13-scheduler](https://github.com/ossrs/state-threads/issues/13#issuecomment-616025527).
 * About the IO event system, read [#13-IO](https://github.com/ossrs/state-threads/issues/13#issuecomment-616096568).
 * Code analysis, please read [#15](https://github.com/ossrs/state-threads/issues/15).
-
-## CLion
-
-Use [CLion](https://www.jetbrains.com/clion/) to open directory state-threads.
-
-Then, open `ide/st_clion/CMakeLists.txt` and click `Load CMake project`.
-
-Finally, select a configuration to run or debug.
 
 Winlin 2016
