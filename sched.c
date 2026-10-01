@@ -720,6 +720,7 @@ void _st_show_thread_stack(_st_thread_t *thread, const char *messg)
 /* To be set from debugger */
 int _st_iterate_threads_flag = 0;
 
+/* GCOVR_EXCL_START */
 void _st_iterate_threads(void)
 {
     static __thread _st_thread_t *thread = NULL;
@@ -758,5 +759,6 @@ void _st_iterate_threads(void)
     memcpy(save_jb, thread->context, sizeof(_st_jmp_buf_t));
     _st_md_cxt_restore(thread->context, 1);
 }
+/* GCOVR_EXCL_STOP */
 #endif /* DEBUG */
 

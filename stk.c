@@ -140,7 +140,7 @@ _st_stack_t *_st_stack_new(int stack_size)
 void _st_stack_free(_st_stack_t *ts)
 {
     if (!ts)
-        return;
+        return; /* GCOVR_EXCL_LINE */
 
     /* Put the stack on the free list */
     st_clist_insert_before(&ts->links, _st_free_stacks.prev);

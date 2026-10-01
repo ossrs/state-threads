@@ -5,7 +5,14 @@
 
 #include <st.h>
 #include <errno.h>
+#include <new>
+#include <pthread.h>
+#include <stdio.h>
 #include <time.h>
+#include <unistd.h>
+
+#include <sys/mman.h>
+#include <sys/wait.h>
 
 #define ST_UTIME_MILLISECONDS 1000
 
@@ -758,4 +765,336 @@ VOID TEST(SleepTest, NegativeSecondsSleepsUntilStopped)
     EXPECT_TRUE(sleeper.done_);
     EXPECT_EQ(-1, sleeper.r0_);
     EXPECT_EQ(EINTR, sleeper.errno_);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for a custom clock, such as a simulation or a test tool that drives time itself instead of waiting for it.
+// st_set_utime_function replaces the monotonic clock behind st_utime, and every timeout counts on it: sleeps, condition
+// variable waits and I/O. It must be set before st_init. The clock is one for the whole process, so each test runs a
+// new OS thread in a forked child, and the child reports what it saw through shared memory. When no coroutine can run,
+// ST waits for the earliest timer in real time, so a test never lets that happen with a timer hours away on the custom
+// clock: it moves the clock, then yields, and the yield checks the timers first. SRS doesn't call it.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define ST_UTIME_SECONDS ((st_utime_t)1000 * ST_UTIME_MILLISECONDS)
+
+// The time the test tool says it is, in microseconds. Each forked child has its own copy.
+static st_utime_t custom_clock_test_now;
+
+static st_utime_t custom_clock_test_read(void)
+{
+    return custom_clock_test_now;
+}
+
+// A second clock that a test tries to install after the first one.
+static st_utime_t custom_clock_test_other(void)
+{
+    return 7;
+}
+
+// A result shared with the forked child; T must be plain data, since the child's heap is its own.
+template <typename T>
+struct CustomClockTestShared {
+    T* p_;
+    CustomClockTestShared() : p_(NULL) {
+        void* m = mmap(NULL, sizeof(T), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+        if (m != MAP_FAILED) p_ = new (m) T();
+    }
+    ~CustomClockTestShared() {
+        if (p_) munmap(p_, sizeof(T));
+    }
+};
+
+struct CustomClockTestChild {
+    void (*body_)(void*);
+    void* arg_;
+    int done_[2];
+};
+
+static void* custom_clock_test_thread(void* arg)
+{
+    CustomClockTestChild* c = (CustomClockTestChild*)arg;
+    c->body_(c->arg_);
+
+    char done = 1;
+    if (::write(c->done_[1], &done, 1) != 1) _exit(1);
+
+    // ST can't free an instance, so keep the thread and its instance alive until the child exits.
+    for (;;) pause();
+    return NULL;
+}
+
+// Runs body on a new OS thread in a forked child, and returns the child's exit status, or -1 if it didn't exit. The
+// thread has no ST yet: body sets the clock and calls st_init itself.
+static int custom_clock_test_run(void (*body)(void*), void* arg)
+{
+    fflush(stdout);
+    fflush(stderr);
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        // A hang kills the child and fails the test, instead of hanging the suite. It also catches a wait in real
+        // time for a timer that is hours away on the custom clock.
+        alarm(5);
+
+        CustomClockTestChild c;
+        c.body_ = body;
+        c.arg_ = arg;
+        if (pipe(c.done_) < 0) _exit(1);
+
+        pthread_t trd;
+        if (pthread_create(&trd, NULL, custom_clock_test_thread, &c) != 0) _exit(1);
+
+        char done = 0;
+        if (::read(c.done_[0], &done, 1) != 1) _exit(1);
+
+        // Not _exit, so a coverage build writes the child's counters.
+        exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid) return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+struct CustomClockTestSleep {
+    int set_r0_;
+    int init_r0_;
+    st_utime_t utime_;
+    st_utime_t last_clock_;
+    int started_;
+    int done_after_59m_;
+    int done_after_60m_;
+    int sleep_r0_;
+    st_utime_t utime_after_;
+    st_utime_t last_clock_after_;
+};
+
+static void* custom_clock_test_sleeper(void* arg)
+{
+    CustomClockTestSleep* r = (CustomClockTestSleep*)arg;
+    r->started_ = 1;
+    r->sleep_r0_ = st_usleep(3600 * ST_UTIME_SECONDS);
+    r->done_after_60m_ = 1;
+    return NULL;
+}
+
+static void custom_clock_test_sleep(void* arg)
+{
+    CustomClockTestSleep* r = (CustomClockTestSleep*)arg;
+
+    custom_clock_test_now = 1000 * ST_UTIME_SECONDS;
+    r->set_r0_ = st_set_utime_function(custom_clock_test_read);
+    if (st_set_eventsys(ST_EVENTSYS_ALT) < 0) return;
+    r->init_r0_ = st_init();
+    r->utime_ = st_utime();
+    r->last_clock_ = st_utime_last_clock();
+
+    if (!st_thread_create(custom_clock_test_sleeper, r, 0, 0)) return;
+
+    // The sleeper starts, and sleeps for an hour from the time the tool set.
+    st_thread_yield();
+
+    custom_clock_test_now += 59 * 60 * ST_UTIME_SECONDS;
+    st_thread_yield();
+    r->done_after_59m_ = r->done_after_60m_;
+
+    custom_clock_test_now += 60 * ST_UTIME_SECONDS;
+    st_thread_yield();
+
+    r->utime_after_ = st_utime();
+    r->last_clock_after_ = st_utime_last_clock();
+}
+
+// A test tool sets its own clock before st_init, and st_utime reads it. A coroutine sleeps for an hour. The tool moves
+// its clock 59 minutes ahead: the coroutine still sleeps. One more minute, and the coroutine wakes and its sleep
+// returns 0, with no real time spent waiting. The scheduler's last clock reading is the tool's time too. Locks in
+// current behavior.
+VOID TEST(CustomClockTest, SimulatedHourPassesAtOnce)
+{
+    CustomClockTestShared<CustomClockTestSleep> shared;
+    ASSERT_TRUE(shared.p_ != NULL);
+    CustomClockTestSleep* r = shared.p_;
+    r->sleep_r0_ = -2;
+
+    st_utime_t starttime = st_utime();
+    EXPECT_EQ(0, custom_clock_test_run(custom_clock_test_sleep, r));
+    EXPECT_LT(st_utime() - starttime, 1 * ST_UTIME_SECONDS);
+
+    EXPECT_EQ(0, r->set_r0_);
+    EXPECT_EQ(0, r->init_r0_);
+    EXPECT_EQ(1000 * ST_UTIME_SECONDS, r->utime_);
+    EXPECT_EQ(1000 * ST_UTIME_SECONDS, r->last_clock_);
+
+    EXPECT_EQ(1, r->started_);
+    EXPECT_EQ(0, r->done_after_59m_);
+    EXPECT_EQ(1, r->done_after_60m_);
+    EXPECT_EQ(0, r->sleep_r0_);
+
+    EXPECT_EQ(4600 * ST_UTIME_SECONDS, r->utime_after_);
+    EXPECT_EQ(4600 * ST_UTIME_SECONDS, r->last_clock_after_);
+}
+
+struct CustomClockTestRead {
+    int init_r0_;
+    int started_;
+    int done_after_29s_;
+    int done_after_30s_;
+    int read_r0_;
+    int read_errno_;
+    int close_r0_;
+};
+
+struct CustomClockTestReader {
+    CustomClockTestRead* r_;
+    st_netfd_t fd_;
+};
+
+static void* custom_clock_test_reader(void* arg)
+{
+    CustomClockTestReader* c = (CustomClockTestReader*)arg;
+    c->r_->started_ = 1;
+
+    char buf[16];
+    errno = 0;
+    c->r_->read_r0_ = (int)st_read(c->fd_, buf, sizeof(buf), 30 * ST_UTIME_SECONDS);
+    c->r_->read_errno_ = errno;
+    c->r_->done_after_30s_ = 1;
+    return NULL;
+}
+
+static void custom_clock_test_read_timeout(void* arg)
+{
+    CustomClockTestRead* r = (CustomClockTestRead*)arg;
+
+    custom_clock_test_now = 1000 * ST_UTIME_SECONDS;
+    if (st_set_utime_function(custom_clock_test_read) < 0) return;
+    if (st_set_eventsys(ST_EVENTSYS_ALT) < 0) return;
+    r->init_r0_ = st_init();
+
+    int fds[2];
+    if (pipe(fds) < 0) return;
+    CustomClockTestReader c;
+    c.r_ = r;
+    c.fd_ = st_netfd_open(fds[0]);
+    if (!c.fd_) return;
+
+    if (!st_thread_create(custom_clock_test_reader, &c, 0, 0)) return;
+
+    // The reader starts and waits on the quiet pipe, with a 30 s timeout from the time the tool set.
+    st_thread_yield();
+
+    custom_clock_test_now += 29 * ST_UTIME_SECONDS;
+    st_thread_yield();
+    r->done_after_29s_ = r->done_after_30s_;
+
+    custom_clock_test_now += 1 * ST_UTIME_SECONDS;
+    st_thread_yield();
+
+    r->close_r0_ = st_netfd_close(c.fd_);
+    ::close(fds[1]);
+}
+
+// I/O timeouts count on the custom clock too. A reader waits on a quiet pipe with a 30 s timeout. The tool moves its
+// clock 29 s ahead: the reader still waits. One more second, and the read fails with ETIME, with no real time spent
+// waiting. The reader left no wait behind, so the pipe then closes without EBUSY. Locks in current behavior.
+VOID TEST(CustomClockTest, ReadTimesOutOnSimulatedClock)
+{
+    CustomClockTestShared<CustomClockTestRead> shared;
+    ASSERT_TRUE(shared.p_ != NULL);
+    CustomClockTestRead* r = shared.p_;
+    r->close_r0_ = -2;
+
+    st_utime_t starttime = st_utime();
+    EXPECT_EQ(0, custom_clock_test_run(custom_clock_test_read_timeout, r));
+    EXPECT_LT(st_utime() - starttime, 1 * ST_UTIME_SECONDS);
+
+    EXPECT_EQ(0, r->init_r0_);
+    EXPECT_EQ(1, r->started_);
+    EXPECT_EQ(0, r->done_after_29s_);
+    EXPECT_EQ(1, r->done_after_30s_);
+    EXPECT_EQ(-1, r->read_r0_);
+    EXPECT_EQ(ETIME, r->read_errno_);
+    EXPECT_EQ(0, r->close_r0_);
+}
+
+struct CustomClockTestRefused {
+    int set_r0_;
+    st_utime_t utime_set_;
+    int reset_r0_;
+    st_utime_t system_before_;
+    st_utime_t utime_reset_;
+    st_utime_t system_after_;
+    int set_again_r0_;
+    int init_r0_;
+    int other_r0_;
+    int other_errno_;
+    int null_r0_;
+    int null_errno_;
+    st_utime_t utime_after_;
+};
+
+static st_utime_t custom_clock_test_monotonic(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+static void custom_clock_test_refused(void* arg)
+{
+    CustomClockTestRefused* r = (CustomClockTestRefused*)arg;
+
+    custom_clock_test_now = 1000 * ST_UTIME_SECONDS;
+    r->set_r0_ = st_set_utime_function(custom_clock_test_read);
+    r->utime_set_ = st_utime();
+
+    r->reset_r0_ = st_set_utime_function(NULL);
+    r->system_before_ = custom_clock_test_monotonic();
+    r->utime_reset_ = st_utime();
+    r->system_after_ = custom_clock_test_monotonic();
+
+    r->set_again_r0_ = st_set_utime_function(custom_clock_test_read);
+    if (st_set_eventsys(ST_EVENTSYS_ALT) < 0) return;
+    r->init_r0_ = st_init();
+
+    errno = 0;
+    r->other_r0_ = st_set_utime_function(custom_clock_test_other);
+    r->other_errno_ = errno;
+
+    errno = 0;
+    r->null_r0_ = st_set_utime_function(NULL);
+    r->null_errno_ = errno;
+
+    r->utime_after_ = st_utime();
+}
+
+// Before st_init, a program can set a clock, and set NULL to go back to the system's monotonic clock. Once ST runs on
+// the thread, its timers already count on the clock it has, so changing it, to another clock or back to the system's,
+// fails with EINVAL and st_utime keeps reading the same clock. Locks in current behavior.
+VOID TEST(CustomClockTest, RefusedOnceStRuns)
+{
+    CustomClockTestShared<CustomClockTestRefused> shared;
+    ASSERT_TRUE(shared.p_ != NULL);
+    CustomClockTestRefused* r = shared.p_;
+    r->null_r0_ = -2;
+
+    EXPECT_EQ(0, custom_clock_test_run(custom_clock_test_refused, r));
+
+    EXPECT_EQ(0, r->set_r0_);
+    EXPECT_EQ(1000 * ST_UTIME_SECONDS, r->utime_set_);
+
+    EXPECT_EQ(0, r->reset_r0_);
+    EXPECT_GE(r->utime_reset_, r->system_before_);
+    EXPECT_LE(r->utime_reset_, r->system_after_);
+
+    EXPECT_EQ(0, r->set_again_r0_);
+    EXPECT_EQ(0, r->init_r0_);
+    EXPECT_EQ(-1, r->other_r0_);
+    EXPECT_EQ(EINVAL, r->other_errno_);
+    EXPECT_EQ(-1, r->null_r0_);
+    EXPECT_EQ(EINVAL, r->null_errno_);
+    EXPECT_EQ(1000 * ST_UTIME_SECONDS, r->utime_after_);
 }
