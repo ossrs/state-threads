@@ -24,20 +24,20 @@
 
 // A coroutine stack is one mapping, from low to high addresses: a guard page, the stack, the random extra page when
 // randomized, and a guard page. A coroutine starts near the top, so for a stack that isn't randomized, the top is the
-// page boundary just above a local variable of the coroutine's start function.
+// page boundary just above the frame of the coroutine's start function. The tests read the frame address, not the
+// address of a local variable, because ASAN may move a local variable to a fake stack on the heap.
 #define ST_STACK_TEST_SIZE (64 * 1024)
 
 struct StackTestCoroutine {
-    uintptr_t local_;
-    StackTestCoroutine() : local_(0) {
+    uintptr_t frame_;
+    StackTestCoroutine() : frame_(0) {
     }
 };
 
 static void* stack_test_record_coroutine(void* arg)
 {
     StackTestCoroutine* c = (StackTestCoroutine*)arg;
-    char local = 0;
-    c->local_ = (uintptr_t)&local;
+    c->frame_ = (uintptr_t)__builtin_frame_address(0);
     return NULL;
 }
 
@@ -52,11 +52,11 @@ static bool stack_test_readable(uintptr_t p)
     return readable;
 }
 
-// The top of a stack that isn't randomized, from a local variable of its coroutine.
+// The top of a stack that isn't randomized, from the frame of its coroutine.
 static uintptr_t stack_test_top(const StackTestCoroutine& c)
 {
     uintptr_t pagesize = (uintptr_t)getpagesize();
-    return (c.local_ & ~(pagesize - 1)) + pagesize;
+    return (c.frame_ & ~(pagesize - 1)) + pagesize;
 }
 
 // Randomization is off by default, and each call returns the previous setting. Locks in current behavior.
@@ -68,10 +68,10 @@ VOID TEST(RandomizeStacksTest, SwitchReturnsPrevious)
     EXPECT_EQ(0, st_randomize_stacks(0));
 }
 
-// Without randomization every coroutine's stack starts at the same place within its page, so a local variable of the
-// same function sits at the same page offset in each one. With randomization on, new coroutines put it at different
-// offsets, each shifted by a multiple of 16 bytes so the stack stays aligned, and each coroutine runs normally. Locks in
-// current behavior.
+// Without randomization every coroutine's stack starts at the same place within its page, so the frame of the same
+// function sits at the same page offset in each one. With randomization on, new coroutines put it at different
+// offsets, each shifted by a multiple of 16 bytes so the stack stays aligned, and each coroutine runs normally.
+// Locks in current behavior.
 VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
 {
     const int n = 16;
@@ -84,8 +84,8 @@ VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
         st_thread_t trd = st_thread_create(stack_test_record_coroutine, &c, 1, ST_STACK_TEST_SIZE);
         ASSERT_TRUE(trd != NULL);
         EXPECT_EQ(0, st_thread_join(trd, NULL));
-        if (i == 0) plain = c.local_ & (pagesize - 1);
-        EXPECT_EQ(plain, c.local_ & (pagesize - 1));
+        if (i == 0) plain = c.frame_ & (pagesize - 1);
+        EXPECT_EQ(plain, c.frame_ & (pagesize - 1));
     }
 
     // On: different page offsets, each a multiple of 16 bytes away from the plain one. All n coroutines landing on one
@@ -97,7 +97,7 @@ VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
         st_thread_t trd = st_thread_create(stack_test_record_coroutine, &c, 1, ST_STACK_TEST_SIZE);
         ASSERT_TRUE(trd != NULL);
         EXPECT_EQ(0, st_thread_join(trd, NULL));
-        uintptr_t offset = c.local_ & (pagesize - 1);
+        uintptr_t offset = c.frame_ & (pagesize - 1);
         EXPECT_EQ(0u, (offset - plain) & 0xf);
         if (offset != plain) moved++;
     }
@@ -116,8 +116,7 @@ VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
 static void* stack_test_park_coroutine(void* arg)
 {
     StackTestCoroutine* c = (StackTestCoroutine*)arg;
-    char local = 0;
-    c->local_ = (uintptr_t)&local;
+    c->frame_ = (uintptr_t)__builtin_frame_address(0);
     st_usleep(ST_UTIME_NO_TIMEOUT);
     return NULL;
 }

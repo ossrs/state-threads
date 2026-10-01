@@ -688,3 +688,301 @@ VOID TEST(SelectTest, ReaderAndAbortWaiterShareConnection)
 
     EXPECT_EQ(0, r.p_->close_r0_);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The utest for a descriptor closed under a waiter on select, a program bug: a coroutine closes a connection with
+// close() while another coroutine waits on it, instead of st_netfd_close, which would refuse with EBUSY. Select then
+// fails with EBADF on every call, so ST probes each waiting descriptor, wakes the waiters of the closed one with
+// POLLNVAL, which st_read and st_write report as EBADF, and keeps the others waiting.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+struct SelectTestClosed {
+    int init_r0_;
+    bool filled_;
+    // Whether each coroutine was done after the close, and after the second client sent a byte.
+    bool received_[2];
+    bool sent_[2];
+    bool other_done_[2];
+    SelectTestRead receive_;
+    SelectTestRead send_;
+    SelectTestRead other_;
+    int close_r0_;
+    int close_errno_;
+    int other_close_r0_;
+};
+
+static void select_test_closed(void* arg)
+{
+    SelectTestClosed* r = (SelectTestClosed*)arg;
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+
+    // The second connection has the higher descriptor, so select must keep watching it after the first one is gone.
+    int a[2], b[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, a) < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, b) < 0) return;
+    int sndbuf = 4096;
+    setsockopt(a[0], SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    st_netfd_t conn_a = st_netfd_open_socket(a[0]);
+    st_netfd_t conn_b = st_netfd_open_socket(b[0]);
+    if (!conn_a || !conn_b) return;
+
+    // The first client reads nothing, so its connection's send buffer fills up.
+    char buf[1024];
+    memset(buf, 0, sizeof(buf));
+    while (::write(a[0], buf, sizeof(buf)) > 0) {
+    }
+    r->filled_ = (errno == EAGAIN || errno == EWOULDBLOCK);
+
+    SelectTestReader receiver = {conn_a, SELECT_TEST_TIMEOUT, &r->receive_};
+    SelectTestSender sender = {conn_a, &r->send_};
+    SelectTestReader other = {conn_b, SELECT_TEST_TIMEOUT, &r->other_};
+    st_thread_t receive_trd = st_thread_create(select_test_reader_coroutine, &receiver, 1, 0);
+    st_thread_t send_trd = st_thread_create(select_test_sender_coroutine, &sender, 1, 0);
+    st_thread_t other_trd = st_thread_create(select_test_reader_coroutine, &other, 1, 0);
+    if (!receive_trd || !send_trd || !other_trd) return;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+
+    // The bug: the first connection is closed while its coroutines wait.
+    ::close(a[0]);
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    r->received_[0] = r->receive_.done_;
+    r->sent_[0] = r->send_.done_;
+    r->other_done_[0] = r->other_.done_;
+
+    // The second client sends a byte, and its reader wakes with it.
+    if (::write(b[1], "b", 1) != 1) return;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    r->received_[1] = r->receive_.done_;
+    r->sent_[1] = r->send_.done_;
+    r->other_done_[1] = r->other_.done_;
+
+    st_thread_join(receive_trd, NULL);
+    st_thread_join(send_trd, NULL);
+    st_thread_join(other_trd, NULL);
+
+    // Nothing waits on the first connection any more, so ST frees it, and only close() fails, on the closed descriptor.
+    errno = 0;
+    r->close_r0_ = st_netfd_close(conn_a);
+    r->close_errno_ = errno;
+    r->other_close_r0_ = st_netfd_close(conn_b);
+    ::close(a[1]);
+    ::close(b[1]);
+}
+
+// Two clients are connected. The first has a receive and a send coroutine, the way SRS serves a client, and reads
+// nothing, so its sender waits for room to write. The second has a reader waiting. By mistake, the first connection is
+// closed with close() while its coroutines wait. Both wake at once with EBADF, instead of waiting for their 1 s timeout
+// while select fails over and over. The second reader keeps waiting, and wakes with the byte its client sends. Then
+// st_netfd_close on the first connection doesn't fail with EBUSY, since its coroutines are gone, but with EBADF from
+// close(). Locks in current behavior.
+VOID TEST(SelectTest, ClosedConnectionWakesItsCoroutines)
+{
+    SelectTestShared<SelectTestClosed> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->close_r0_ = r.p_->other_close_r0_ = 1;
+    ASSERT_EQ(0, select_test_run(select_test_closed, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+    ASSERT_TRUE(r.p_->filled_);
+
+    EXPECT_TRUE(r.p_->received_[0]);
+    EXPECT_EQ(-1, r.p_->receive_.r0_);
+    EXPECT_EQ(EBADF, r.p_->receive_.errno_);
+    EXPECT_TRUE(r.p_->sent_[0]);
+    EXPECT_EQ(-1, r.p_->send_.r0_);
+    EXPECT_EQ(EBADF, r.p_->send_.errno_);
+    EXPECT_FALSE(r.p_->other_done_[0]);
+
+    EXPECT_TRUE(r.p_->other_done_[1]);
+    EXPECT_EQ(1, r.p_->other_.r0_);
+    EXPECT_EQ('b', r.p_->other_.data_);
+
+    EXPECT_EQ(-1, r.p_->close_r0_);
+    EXPECT_EQ(EBADF, r.p_->close_errno_);
+    EXPECT_EQ(0, r.p_->other_close_r0_);
+}
+
+struct SelectTestAfterBadFd {
+    st_netfd_t stfd_;
+    st_cond_t stop_;
+    SelectTestRead read_;
+    int stop_r0_;
+    int stop_errno_;
+    bool stopped_;
+};
+
+static void* select_test_after_bad_fd_coroutine(void* arg)
+{
+    SelectTestAfterBadFd* c = (SelectTestAfterBadFd*)arg;
+    errno = 0;
+    c->read_.r0_ = (int)st_read(c->stfd_, &c->read_.data_, 1, 30 * ST_UTIME_MILLISECONDS);
+    c->read_.errno_ = errno;
+    c->read_.done_ = true;
+
+    // After the error, the connection waits to be stopped, with no timeout.
+    errno = 0;
+    c->stop_r0_ = st_cond_wait(c->stop_);
+    c->stop_errno_ = errno;
+    c->stopped_ = true;
+    return NULL;
+}
+
+struct SelectTestTimer {
+    int init_r0_;
+    // Whether the connection had read, and had stopped, after the close and after its read timeout would have expired.
+    bool read_[2];
+    bool stopped_[2];
+    SelectTestAfterBadFd conn_;
+};
+
+static void select_test_timer(void* arg)
+{
+    SelectTestTimer* r = (SelectTestTimer*)arg;
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) return;
+    r->conn_.stfd_ = st_netfd_open_socket(fds[0]);
+    r->conn_.stop_ = st_cond_new();
+    if (!r->conn_.stfd_ || !r->conn_.stop_) return;
+
+    st_thread_t trd = st_thread_create(select_test_after_bad_fd_coroutine, &r->conn_, 1, 0);
+    if (!trd) return;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+
+    // The bug: the connection is closed while it waits to read.
+    ::close(fds[0]);
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    r->read_[0] = r->conn_.read_.done_;
+    r->stopped_[0] = r->conn_.stopped_;
+
+    // 20 ms past the 30 ms the read would have timed out at.
+    st_usleep(30 * ST_UTIME_MILLISECONDS);
+    r->read_[1] = r->conn_.read_.done_;
+    r->stopped_[1] = r->conn_.stopped_;
+
+    st_cond_signal(r->conn_.stop_);
+    st_thread_join(trd, NULL);
+
+    st_cond_destroy(r->conn_.stop_);
+    st_netfd_free(r->conn_.stfd_);
+    ::close(fds[1]);
+}
+
+// A connection reads with a 30 ms timeout, and by mistake it is closed with close() after 10 ms while it waits. It
+// wakes at once with EBADF, and then waits to be stopped, with no timeout. Its read timeout is cancelled when it wakes:
+// 20 ms after the read would have timed out, it is still waiting, where a stale timer would wake it with ETIME. It is stopped with a signal, and its wait returns 0.
+// Locks in current behavior.
+VOID TEST(SelectTest, ClosedUnderTimedReaderCancelsTimeout)
+{
+    SelectTestShared<SelectTestTimer> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->conn_.stop_r0_ = 1;
+    ASSERT_EQ(0, select_test_run(select_test_timer, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+
+    EXPECT_TRUE(r.p_->read_[0]);
+    EXPECT_EQ(-1, r.p_->conn_.read_.r0_);
+    EXPECT_EQ(EBADF, r.p_->conn_.read_.errno_);
+    EXPECT_FALSE(r.p_->stopped_[0]);
+
+    EXPECT_FALSE(r.p_->stopped_[1]);
+
+    EXPECT_EQ(0, r.p_->conn_.stop_r0_);
+    EXPECT_EQ(0, r.p_->conn_.stop_errno_);
+}
+
+struct SelectTestPollWaiter {
+    struct pollfd pds_[2];
+    int r0_;
+    bool done_;
+};
+
+static void* select_test_poll_waiter_coroutine(void* arg)
+{
+    SelectTestPollWaiter* w = (SelectTestPollWaiter*)arg;
+    w->r0_ = st_poll(w->pds_, 2, SELECT_TEST_TIMEOUT);
+    w->done_ = true;
+    return NULL;
+}
+
+struct SelectTestPollClosed {
+    int init_r0_;
+    int conn_fd_;
+    bool done_;
+    SelectTestPollWaiter waiter_;
+    int stop_close_r0_;
+    int next_fd_;
+    int next_close_r0_;
+};
+
+static void select_test_poll_closed(void* arg)
+{
+    SelectTestPollClosed* r = (SelectTestPollClosed*)arg;
+
+    st_set_eventsys(ST_EVENTSYS_SELECT);
+    if ((r->init_r0_ = st_init()) != 0) return;
+
+    int stop[2], conn[2];
+    if (pipe(stop) < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, conn) < 0) return;
+    st_netfd_t stop_stfd = st_netfd_open(stop[0]);
+    if (!stop_stfd) return;
+    r->conn_fd_ = conn[0];
+
+    // The server waits for a command or an abort on its connection, or for a stop request, in one st_poll.
+    SelectTestPollWaiter* w = &r->waiter_;
+    w->pds_[0].fd = conn[0];
+    w->pds_[0].events = POLLIN | POLLPRI;
+    w->pds_[1].fd = stop[0];
+    w->pds_[1].events = POLLIN;
+    st_thread_t trd = st_thread_create(select_test_poll_waiter_coroutine, w, 1, 0);
+    if (!trd) return;
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+
+    // The bug: the connection is closed while the server waits on it.
+    ::close(conn[0]);
+    st_usleep(10 * ST_UTIME_MILLISECONDS);
+    r->done_ = w->done_;
+    st_thread_join(trd, NULL);
+
+    // The next connection gets the closed descriptor's number, with no waiter left counted on it.
+    int next[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, next) < 0) return;
+    r->next_fd_ = next[0];
+    st_netfd_t next_stfd = st_netfd_open_socket(next[0]);
+    if (!next_stfd) return;
+    r->next_close_r0_ = st_netfd_close(next_stfd);
+
+    // The stop pipe was left unregistered too.
+    r->stop_close_r0_ = st_netfd_close(stop_stfd);
+
+    ::close(next[1]);
+    ::close(conn[1]);
+    ::close(stop[1]);
+}
+
+// A server waits in one st_poll for a command or an urgent abort on its connection, or for a stop request on a pipe,
+// and by mistake the connection is closed with close() while it waits. The wait returns 1 at once, with POLLNVAL on the
+// connection and nothing on the pipe. The whole set is unregistered: the pipe closes without EBUSY, and the next
+// connection, which gets the closed descriptor's number, closes without EBUSY too, so no read or priority waiter is
+// left counted on it. Locks in current behavior.
+VOID TEST(SelectTest, ClosedInPollSetIsReported)
+{
+    SelectTestShared<SelectTestPollClosed> r;
+    ASSERT_TRUE(r.p_ != NULL);
+    r.p_->stop_close_r0_ = r.p_->next_close_r0_ = 1;
+    r.p_->next_fd_ = -1;
+    ASSERT_EQ(0, select_test_run(select_test_poll_closed, r.p_));
+    ASSERT_EQ(0, r.p_->init_r0_);
+
+    EXPECT_TRUE(r.p_->done_);
+    EXPECT_EQ(1, r.p_->waiter_.r0_);
+    EXPECT_EQ(POLLNVAL, r.p_->waiter_.pds_[0].revents);
+    EXPECT_EQ(0, r.p_->waiter_.pds_[1].revents);
+
+    EXPECT_EQ(0, r.p_->stop_close_r0_);
+    EXPECT_EQ(r.p_->conn_fd_, r.p_->next_fd_);
+    EXPECT_EQ(0, r.p_->next_close_r0_);
+}
