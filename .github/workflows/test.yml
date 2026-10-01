@@ -49,3 +49,18 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
           disable_search: true
+
+  # The single check to require for merging. It runs even when a needed job
+  # fails, because a skipped required check counts as passed.
+  final:
+    name: actions-test-final
+    runs-on: ubuntu-24.04
+    needs: [utest, coverage]
+    if: always()
+
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          echo "utest: ${{ needs.utest.result }}, coverage: ${{ needs.coverage.result }}"
+          test "${{ needs.utest.result }}" = success
+          test "${{ needs.coverage.result }}" = success

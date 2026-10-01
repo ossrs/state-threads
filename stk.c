@@ -109,9 +109,9 @@ _st_stack_t *_st_stack_new(int stack_size)
         return NULL; /* GCOVR_EXCL_LINE */
     ts->vaddr_size = stack_size + 2*REDZONE + extra;
     ts->vaddr = _st_new_stk_segment(ts->vaddr_size);
-    if (!ts->vaddr) {
-        free(ts);
-        return NULL;
+    if (!ts->vaddr) { /* GCOVR_EXCL_BR_LINE */
+        free(ts); /* GCOVR_EXCL_LINE */
+        return NULL; /* GCOVR_EXCL_LINE */
     }
     ts->stk_size = stack_size;
     ts->stk_bottom = ts->vaddr + REDZONE;
@@ -170,8 +170,8 @@ static char *_st_new_stk_segment(int size)
 #endif
     
     vaddr = mmap(NULL, size, PROT_READ | PROT_WRITE, mmap_flags, zero_fd, 0);
-    if (vaddr == (void *)MAP_FAILED)
-        return NULL;
+    if (vaddr == (void *)MAP_FAILED) /* GCOVR_EXCL_BR_LINE */
+        return NULL; /* GCOVR_EXCL_LINE */
     
 #endif /* MALLOC_STACK */
     

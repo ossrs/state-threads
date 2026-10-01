@@ -1024,8 +1024,8 @@ ST_HIDDEN int _st_epoll_pollset_add(struct pollfd *pds, int npds)
             errno = EINVAL;
             return -1;
         }
-        if (fd >= _st_epoll_data->fd_data_size && _st_epoll_fd_data_expand(fd) < 0)
-            return -1;
+        if (fd >= _st_epoll_data->fd_data_size && _st_epoll_fd_data_expand(fd) < 0) /* GCOVR_EXCL_BR_LINE */
+            return -1; /* GCOVR_EXCL_LINE */
     }
 
     for (i = 0; i < npds; i++) {
@@ -1184,8 +1184,8 @@ ST_HIDDEN void _st_epoll_dispatch(void)
 
 ST_HIDDEN int _st_epoll_fd_new(int osfd)
 {
-    if (osfd >= _st_epoll_data->fd_data_size && _st_epoll_fd_data_expand(osfd) < 0)
-        return -1;
+    if (osfd >= _st_epoll_data->fd_data_size && _st_epoll_fd_data_expand(osfd) < 0) /* GCOVR_EXCL_BR_LINE */
+        return -1; /* GCOVR_EXCL_LINE */
 
     return 0;   
 }
