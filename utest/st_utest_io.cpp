@@ -1250,10 +1250,10 @@ static bool io_fill_buffers(int fd, std::string& filled)
         size_t sizes[] = {sizeof(chunk), 1};
         for (int i = 0; i < 2; i++) {
             ssize_t n;
-            while ((n = ::write(fd, chunk, sizes[i])) > 0) {
+            while ((n = st_utest_send(fd, chunk, sizes[i])) > 0) {
                 filled.append(chunk, n);
             }
-            if (n == 0 || errno != EAGAIN) return false;
+            if (n == 0 || !st_utest_would_block()) return false;
         }
         if (filled.size() == size && settling) return true;
         settling = filled.size() == size;
@@ -1621,7 +1621,7 @@ static bool io_pipe(IoTestPipe& p)
 }
 
 struct IoTestSignalReader {
-    IoTestPipe* pipe_;
+    st_netfd_t stfd_;
     int signo_;
     ssize_t nread_;
     int errno_;
@@ -1631,7 +1631,7 @@ static void* io_signal_reader_coroutine(void* arg)
 {
     IoTestSignalReader* r = (IoTestSignalReader*)arg;
     errno = 0;
-    r->nread_ = st_read(r->pipe_->reader_, &r->signo_, sizeof(r->signo_), ST_UTIME_NO_TIMEOUT);
+    r->nread_ = st_read(r->stfd_, &r->signo_, sizeof(r->signo_), ST_UTIME_NO_TIMEOUT);
     r->errno_ = errno;
     return NULL;
 }
@@ -1647,7 +1647,7 @@ VOID TEST(IoNetfdTest, SignalPipeWakesWaitingCoroutine)
 
     IoTestSignalReader r;
     memset(&r, 0, sizeof(r));
-    r.pipe_ = &p;
+    r.stfd_ = p.reader_;
     st_thread_t reader = st_thread_create(io_signal_reader_coroutine, &r, 1, 0);
     ASSERT_TRUE(reader != NULL);
 
@@ -1670,29 +1670,29 @@ VOID TEST(IoNetfdTest, SignalPipeWakesWaitingCoroutine)
 // behavior.
 VOID TEST(IoNetfdTest, CloseWhileAnotherCoroutineWaitsIsRefused)
 {
-    IoTestPipe p;
-    ASSERT_TRUE(io_pipe(p));
+    StUtestPair p;
+    ASSERT_TRUE(st_utest_pair_open(p));
 
     IoTestSignalReader r;
     memset(&r, 0, sizeof(r));
-    r.pipe_ = &p;
+    r.stfd_ = p.stfd_;
     st_thread_t reader = st_thread_create(io_signal_reader_coroutine, &r, 1, 0);
     ASSERT_TRUE(reader != NULL);
     st_usleep(10 * ST_UTIME_MILLISECONDS);
 
     errno = 0;
-    EXPECT_EQ(-1, st_netfd_close(p.reader_));
+    EXPECT_EQ(-1, st_netfd_close(p.stfd_));
     EXPECT_EQ(EBUSY, errno);
 
     // The descriptor is still open and the waiter still gets its data.
     int signo = SIGTERM;
-    ASSERT_EQ((ssize_t)sizeof(signo), ::write(p.writer_, &signo, sizeof(signo)));
+    ASSERT_EQ((ssize_t)sizeof(signo), st_utest_send(p.peer_, &signo, sizeof(signo)));
     st_thread_join(reader, NULL);
     EXPECT_EQ((ssize_t)sizeof(signo), r.nread_);
     EXPECT_EQ(SIGTERM, r.signo_);
 
-    EXPECT_EQ(0, st_netfd_close(p.reader_));
-    p.reader_ = NULL;
+    EXPECT_EQ(0, st_netfd_close(p.stfd_));
+    p.stfd_ = NULL;
 }
 
 // A server opens and closes connections all day, so ST recycles descriptor objects: a freed object is handed to the
@@ -1701,15 +1701,15 @@ VOID TEST(IoNetfdTest, CloseWhileAnotherCoroutineWaitsIsRefused)
 VOID TEST(IoNetfdTest, FreedObjectIsRecycledOnce)
 {
     int fds[2];
-    ASSERT_EQ(0, pipe(fds));
+    ASSERT_EQ(0, st_utest_stream_pair(fds));
 
-    st_netfd_t first = st_netfd_open(fds[0]);
+    st_netfd_t first = st_netfd_open_socket(fds[0]);
     ASSERT_TRUE(first != NULL);
     st_netfd_free(first);
     st_netfd_free(first);
 
-    st_netfd_t reader = st_netfd_open(fds[0]);
-    st_netfd_t writer = st_netfd_open(fds[1]);
+    st_netfd_t reader = st_netfd_open_socket(fds[0]);
+    st_netfd_t writer = st_netfd_open_socket(fds[1]);
     ASSERT_TRUE(reader != NULL);
     ASSERT_TRUE(writer != NULL);
     EXPECT_TRUE(reader == first);
@@ -1735,21 +1735,21 @@ VOID TEST(IoNetfdTest, DescriptorDataIsFreedWhenReplacedOrClosed)
 {
     _io_freed_specifics.clear();
 
-    IoTestPipe p;
-    ASSERT_TRUE(io_pipe(p));
+    StUtestPair p;
+    ASSERT_TRUE(st_utest_pair_open(p));
 
     std::string* first = new std::string("first");
-    st_netfd_setspecific(p.reader_, first, io_specific_destructor);
-    st_netfd_setspecific(p.reader_, first, io_specific_destructor);
+    st_netfd_setspecific(p.stfd_, first, io_specific_destructor);
+    st_netfd_setspecific(p.stfd_, first, io_specific_destructor);
     EXPECT_TRUE(_io_freed_specifics.empty());
 
-    st_netfd_setspecific(p.reader_, new std::string("second"), io_specific_destructor);
+    st_netfd_setspecific(p.stfd_, new std::string("second"), io_specific_destructor);
     ASSERT_EQ(1, (int)_io_freed_specifics.size());
     EXPECT_EQ("first", _io_freed_specifics[0]);
-    EXPECT_EQ("second", *(std::string*)st_netfd_getspecific(p.reader_));
+    EXPECT_EQ("second", *(std::string*)st_netfd_getspecific(p.stfd_));
 
-    EXPECT_EQ(0, st_netfd_close(p.reader_));
-    p.reader_ = NULL;
+    EXPECT_EQ(0, st_netfd_close(p.stfd_));
+    p.stfd_ = NULL;
     ASSERT_EQ(2, (int)_io_freed_specifics.size());
     EXPECT_EQ("second", _io_freed_specifics[1]);
 }
