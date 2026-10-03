@@ -194,11 +194,12 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
     #define MD_ACCEPT_NB_NOT_INHERITED
     #define MD_HAVE_SOCKLEN_T
 
-    /* No mmap or mprotect: allocate stacks with malloc, without red zones. */
-    #ifndef MALLOC_STACK
-        #define MALLOC_STACK
-    #endif
-    #ifndef MD_NO_PROTECT
+    /*
+     * Stacks come from VirtualAlloc, with VirtualProtect red zones in DEBUG (stk.c). With
+     * MALLOC_STACK there are no red zones: VirtualProtect rounds a heap address down to its
+     * page, so it would protect heap memory next to the stack, where mprotect fails instead.
+     */
+    #if defined(MALLOC_STACK) && !defined(MD_NO_PROTECT)
         #define MD_NO_PROTECT
     #endif
 
