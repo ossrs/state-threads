@@ -682,6 +682,15 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinabl
     /* Set the stack bounds the OS keeps for the new thread, such as the TIB on Windows. */
     MD_INIT_STACK_BOUNDS(thread, stack->stk_bottom, stack->stk_top);
 #endif
+#ifdef MD_INIT_THREAD_ENTRY
+    /*
+     * Start the new thread in an assembly entry that calls _st_thread_main, not after the save above.
+     * TODO: Refine the thread entry for all platforms and CPUs, so all start new threads the same way,
+     * with an assembly entry, and none depends on the save-then-patch-SP trick; only WIN64 has one now.
+     * See docs/win64_coroutine.md.
+     */
+    MD_INIT_THREAD_ENTRY(thread);
+#endif
 
     /* If thread is joinable, allocate a termination condition variable */
     if (joinable) {
