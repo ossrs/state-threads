@@ -59,8 +59,8 @@ jobs:
           files: coverage.xml
           disable_search: true
 
-  # Native Windows with MSVC, built with GNU make from Git Bash. st_utest skips the few
-  # tests that Windows TCP behavior cannot pass, in the test code itself.
+  # Native Windows with MSVC, built with GNU make from Git Bash. Runs st_utest, then
+  # auto/tools.sh in the ST default and SRS builds, as on Linux and macOS.
   windows:
     name: actions-test-build-win64
     runs-on: windows-latest
@@ -105,6 +105,14 @@ jobs:
         shell: bash
         timeout-minutes: 10
         run: ./obj/st_utest.exe
+      - name: Run ST tools
+        shell: bash
+        timeout-minutes: 10
+        run: ./auto/tools.sh
+      - name: Run ST tools in the SRS build
+        shell: bash
+        timeout-minutes: 10
+        run: EXTRA_CFLAGS=-DMALLOC_STACK ./auto/tools.sh
 
       ################################################################
       # Build
