@@ -70,8 +70,14 @@ typedef struct _st_jmp_buf {
      * Linux    __riscv                 long[14]
      * Linux    __loongarch64           long[12]
      * Cygwin64 __amd64__/__x86_64__    long[8]
+     * Win64    _M_X64                  long long[36]
      */
-    long __jmpbuf[22];
+    /* Pointer-sized slots, because MSVC long is 32-bit (LLP64). */
+#if defined(WIN64)
+    intptr_t __jmpbuf[36];
+#else
+    intptr_t __jmpbuf[22];
+#endif
 } _st_jmp_buf_t[1];
 
 /* Defined in *.S file and implemented by ASM. */
@@ -182,6 +188,40 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
         struct timeval tv;              \
         (void) gettimeofday(&tv, NULL); \
         return (tv.tv_sec * 1000000LL + tv.tv_usec)
+
+#elif defined (WIN64)
+
+    #define MD_ACCEPT_NB_NOT_INHERITED
+    #define MD_HAVE_SOCKLEN_T
+
+    /* MSVC has no __thread; use its thread-local storage class. */
+    #define __thread __declspec(thread)
+
+    #if defined(_M_X64) || defined(_M_AMD64)
+        #define MD_GET_SP(_t) *((long long *)&((_t)->context[0].__jmpbuf[8]))
+    #else
+        #error Unknown CPU architecture
+    #endif
+
+    /*
+     * Like CLOCK_MONOTONIC on Linux: QueryPerformanceCounter, the clock that MSVC's
+     * std::chrono::steady_clock uses. Convert whole seconds and the leftover ticks
+     * apart, as steady_clock does, because ticks * 1000000 overflows after about
+     * 10 days of uptime at the common 10 MHz frequency.
+     */
+    #define MD_GET_UTIME()                                              \
+        LARGE_INTEGER counter, freq;                                    \
+        QueryPerformanceCounter(&counter);                              \
+        QueryPerformanceFrequency(&freq);                               \
+        return (st_utime_t)((counter.QuadPart / freq.QuadPart) * 1000000LL + \
+            (counter.QuadPart % freq.QuadPart) * 1000000LL / freq.QuadPart)
+
+    static inline int getpagesize(void)
+    {
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        return (int)si.dwPageSize;
+    }
 
 #else
     #error Unknown OS
