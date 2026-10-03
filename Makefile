@@ -226,6 +226,9 @@ endif
 # or enable support for asan:
 # make EXTRA_CFLAGS="-DMD_ASAN -fsanitize=address -fno-omit-frame-pointer"
 #
+# or enable support for asan on native Windows, where cl has no -fno-omit-frame-pointer:
+# make win64-debug EXTRA_CFLAGS="-DMD_ASAN -fsanitize=address"
+#
 # or to disable the clock_gettime for MacOS before 10.12, see https://github.com/ossrs/srs/issues/3978
 # make EXTRA_CFLAGS=-DMD_OSX_NO_CLOCK_GETTIME
 #
