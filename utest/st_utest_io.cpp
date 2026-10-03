@@ -19,6 +19,8 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/resource.h>
+#include <sys/un.h>
+#include <stddef.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -981,6 +983,98 @@ VOID TEST(IoConnectTest, ConnectToAddressOfAnotherFamilyFails)
     EXPECT_EQ(EAFNOSUPPORT, errno);
 }
 
+#if defined(__linux__)
+// Another thread of the program signals the connecting thread a few times, then accepts the client already queued on
+// the listener, which makes room for the connecting one.
+struct IoTestConnectSignaler {
+    pthread_t target_;
+    int lfd_;
+    int accepted_;
+};
+
+static void* io_connect_signaler_thread(void* arg)
+{
+    IoTestConnectSignaler* s = (IoTestConnectSignaler*)arg;
+    for (int i = 0; i < 3; i++) {
+        usleep(5 * ST_UTIME_MILLISECONDS);
+        pthread_kill(s->target_, SIGUSR1);
+    }
+    usleep(5 * ST_UTIME_MILLISECONDS);
+    s->accepted_ = ::accept(s->lfd_, NULL, NULL);
+    return NULL;
+}
+
+// A signal interrupts connect while it waits in the kernel, and the handler was installed without SA_RESTART, so
+// connect fails with EINTR. st_connect retries it instead of failing, and the retry connects once the listener has
+// room. ST's sockets are non-blocking, so connect returns at once and a signal never lands in it; connect waits in the
+// kernel only when the socket lost O_NONBLOCK. The test clears the flag and connects to a Unix socket listener whose
+// queue is full, where Linux makes a blocking connect wait for room, and signals it on purpose. macOS does not wait
+// there. Locks in current behavior.
+VOID TEST(IoConnectTest, ConnectRetriesWhenSignalInterruptsSystemCall)
+{
+    int lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_NE(-1, lfd);
+    st_netfd_t lstfd = NULL;
+    StFdCleanup(lfd, lstfd);
+
+    // An abstract address, so no file is left behind.
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path + 1, sizeof(addr.sun_path) - 1, "st-utest-connect-%d", (int)getpid());
+    socklen_t addrlen = offsetof(struct sockaddr_un, sun_path) + 1 + strlen(addr.sun_path + 1);
+    ASSERT_EQ(0, ::bind(lfd, (sockaddr*)&addr, addrlen));
+    ASSERT_EQ(0, ::listen(lfd, 0));
+
+    // With a backlog of 0, one queued client fills the queue.
+    int queued = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_NE(-1, queued);
+    st_netfd_t qstfd = NULL;
+    StFdCleanup(queued, qstfd);
+    ASSERT_EQ(0, ::connect(queued, (sockaddr*)&addr, addrlen));
+
+    int cfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_NE(-1, cfd);
+    st_netfd_t client = st_netfd_open_socket(cfd);
+    StFdCleanup(cfd, client);
+    ASSERT_TRUE(client != NULL);
+
+    int flags = fcntl(cfd, F_GETFL);
+    ASSERT_NE(-1, flags);
+    ASSERT_NE(-1, fcntl(cfd, F_SETFL, flags & ~O_NONBLOCK));
+
+    struct sigaction sa, old_sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = io_read_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    ASSERT_EQ(0, sigaction(SIGUSR1, &sa, &old_sa));
+
+    IoTestConnectSignaler s;
+    s.target_ = pthread_self();
+    s.lfd_ = lfd;
+    s.accepted_ = -1;
+    io_read_signals = 0;
+    pthread_t signaler;
+    ASSERT_EQ(0, pthread_create(&signaler, NULL, io_connect_signaler_thread, &s));
+
+    errno = 0;
+    int r0 = st_connect(client, (sockaddr*)&addr, addrlen, ST_UTEST_TIMEOUT);
+    int err = errno;
+
+    pthread_join(signaler, NULL);
+    sigaction(SIGUSR1, &old_sa, NULL);
+    fcntl(cfd, F_SETFL, flags);
+    int afd = s.accepted_;
+    st_netfd_t astfd = NULL;
+    StFdCleanup(afd, astfd);
+
+    EXPECT_EQ(3, (int)io_read_signals);
+    EXPECT_EQ(0, r0) << "errno=" << err;
+    EXPECT_NE(-1, afd);
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The utest for writing a TCP stream, the way SRS sends every RTMP and HTTP-FLV message to a player with st_writev.
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1717,6 +1811,38 @@ VOID TEST(IoNetfdTest, FreedObjectIsRecycledOnce)
 
     EXPECT_EQ(0, st_netfd_close(reader));
     EXPECT_EQ(0, st_netfd_close(writer));
+}
+
+// Opening a descriptor that is already closed, as a caller with a stale fd might, fails with EBADF when ST makes it
+// non-blocking, whether it is opened as a file or as a socket. The descriptor object goes back to the free list, so
+// the next st_netfd_open reuses it. Locks in current behavior.
+VOID TEST(IoNetfdTest, OpenClosedDescriptorFails)
+{
+    int fds[2];
+    ASSERT_EQ(0, st_utest_stream_pair(fds));
+    st_netfd_t first = st_netfd_open_socket(fds[0]);
+    ASSERT_TRUE(first != NULL);
+    st_netfd_free(first);
+
+    int closed[2];
+    ASSERT_EQ(0, st_utest_stream_pair(closed));
+    ::close(closed[0]);
+    ::close(closed[1]);
+
+    errno = 0;
+    EXPECT_TRUE(st_netfd_open(closed[0]) == NULL);
+    EXPECT_EQ(EBADF, errno);
+
+    errno = 0;
+    EXPECT_TRUE(st_netfd_open_socket(closed[1]) == NULL);
+    EXPECT_EQ(EBADF, errno);
+
+    st_netfd_t reader = st_netfd_open_socket(fds[0]);
+    ASSERT_TRUE(reader != NULL);
+    EXPECT_TRUE(reader == first);
+
+    EXPECT_EQ(0, st_netfd_close(reader));
+    ::close(fds[1]);
 }
 
 static std::vector<std::string> _io_freed_specifics;
