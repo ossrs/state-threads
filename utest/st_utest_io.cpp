@@ -3045,13 +3045,17 @@ VOID TEST(UtestPairTest, StreamPairCarriesBothWays)
     ASSERT_TRUE(utest_pair_send_all(fds[1], "pong!"));
     EXPECT_EQ("pong!", utest_pair_recv_n(fds[0], 5));
 
-    // More than a small buffer, in both directions.
+    // More than a socket buffer, in both directions. The ends block and this test is the only reader, so send it in
+    // pieces that each fit in the buffer: a macOS socketpair holds only 8 KB each way.
     std::string big(64 * 1024, 'x');
     for (size_t i = 0; i < big.size(); i++) big[i] = (char)('a' + i % 26);
-    ASSERT_TRUE(utest_pair_send_all(fds[0], big));
-    EXPECT_TRUE(big == utest_pair_recv_n(fds[1], big.size()));
-    ASSERT_TRUE(utest_pair_send_all(fds[1], big));
-    EXPECT_TRUE(big == utest_pair_recv_n(fds[0], big.size()));
+    for (size_t off = 0; off < big.size(); off += 4096) {
+        std::string piece = big.substr(off, 4096);
+        ASSERT_TRUE(utest_pair_send_all(fds[0], piece));
+        ASSERT_TRUE(piece == utest_pair_recv_n(fds[1], piece.size())) << "offset " << off;
+        ASSERT_TRUE(utest_pair_send_all(fds[1], piece));
+        ASSERT_TRUE(piece == utest_pair_recv_n(fds[0], piece.size())) << "offset " << off;
+    }
 
     EXPECT_EQ(0, st_utest_close(fds[0]));
     char c;
