@@ -34,6 +34,9 @@ CXXFLAGS += -DGTEST_USE_OWN_TR1_TUPLE=1
 WARNFLAGS += -Wall -Wno-deprecated-declarations -Wno-unused-private-field -Wno-unused-command-line-argument
 endif
 
+# Whether ../obj/libst.a gets its stacks from malloc, as SRS builds it, from the EXTRA_CFLAGS of ../Makefile.
+CXXFLAGS += $(filter -DMALLOC_STACK,$(EXTRA_CFLAGS))
+
 # House-keeping build targets.
 all : $(ST_DIR)/obj/st_utest$(EXE)
 
