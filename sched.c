@@ -681,7 +681,7 @@ _st_thread_t *st_thread_create(void *(*start)(void *arg), void *arg, int joinabl
     /*
      * The save only fills the jmpbuf as a template, such as the FPU control words, or $gp on MIPS. The new
      * thread never resumes here: MD_INIT_THREAD_ENTRY below points it at an assembly entry on the new stack,
-     * which calls _st_thread_main. See docs/win64_coroutine.md.
+     * which calls _st_thread_main. See docs/coroutine_entry.md.
      */
     _st_md_cxt_save(thread->context);
 #else
