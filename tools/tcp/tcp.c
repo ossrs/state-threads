@@ -555,7 +555,9 @@ static int timeouts(int family)
     st_netfd_t c, s;
     char buf[16];
     CHECK(pair(family, &c, &s) == 0);
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_read(s, buf, sizeof(buf), SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);

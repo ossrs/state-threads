@@ -151,8 +151,10 @@ static int usleep_at_least(void)
 
     st_utime_t sleeps[] = {1000, 5000, 10000};
     for (int i = 0; i < (int)(sizeof(sleeps) / sizeof(sleeps[0])); i++) {
+        /* The sleep counts from the clock reading this yield takes. */
         st_utime_t u0 = st_utime();
         st_utime_t r0 = real_us();
+        st_thread_yield();
         CHECK(st_usleep(sleeps[i]) == 0);
         CHECK(st_utime() - u0 >= sleeps[i]);
         CHECK(real_us() - r0 >= sleeps[i]);

@@ -521,7 +521,9 @@ static int timeouts(int family)
     char buf[16];
     CHECK((fd = udp_bind(family, &addr, &addrlen)) != NULL);
 
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_recvfrom(fd, buf, sizeof(buf), (struct sockaddr *)&from, &fromlen, SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);
@@ -532,6 +534,7 @@ static int timeouts(int family)
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
     start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_recvmsg(fd, &msg, 0, SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);
