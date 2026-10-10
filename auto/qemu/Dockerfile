@@ -4,7 +4,7 @@
 # g++ builds and runs x86_64, which Docker emulates as a whole container instead of qemu-x86_64 running each program.
 FROM ubuntu:24.04 AS amd64
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make g++ \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends make g++ ccache \
     && rm -rf /var/lib/apt/lists/*
 
 # A newer qemu-user than Ubuntu 24.04 has, 10.2 instead of 8.2. Its binaries are statically linked, so the cross
@@ -19,7 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 FROM ubuntu:24.04 AS cross
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        make g++ \
+        make g++ ccache \
         g++-x86-64-linux-gnu g++-aarch64-linux-gnu g++-i686-linux-gnu g++-arm-linux-gnueabihf \
         g++-riscv64-linux-gnu g++-14-loongarch64-linux-gnu \
         g++-mips-linux-gnu g++-mipsel-linux-gnu g++-mips64-linux-gnuabi64 g++-mips64el-linux-gnuabi64 \

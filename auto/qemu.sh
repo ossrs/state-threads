@@ -36,12 +36,17 @@
 # It prints one line per run, "RESULT <cpu> <run> PASS|FAIL (<seconds>s)", with the log of a failed run
 # before it, and exits 1 when any run failed.
 #
+# Every compile goes through ccache, with its cache on the host in ST_QEMU_CCACHE, ~/.cache/st-qemu-ccache by
+# default, mounted in every container, so a second run, or another CPU folder of the same CPU, compiles only
+# what changed. The same checkout path, /st, in every container lets one cache serve every checkout.
+#
 # With all instead of a CPU, it builds the images once, then runs every CPU at once, each in its own container
 # and build folder, with its output in /tmp/st-qemu-all/<cpu>.log, kept until the next run. ST_QEMU_JOBS limits
 # how many CPUs run at once, 5 by default: x86_64 in the emulated amd64 container takes the longest, and 5 at
 # once finished as soon as 10. At the end it prints a summary, one row per CPU with PASS or FAIL and the seconds
 # of each run, and the wall time, then the end of the log of each CPU that failed, and exits 1 when any CPU
-# failed.
+# failed. ST_QEMU_CPUS picks the CPUs of all, every CPU by default, such as "mips mipsel" in CI, where native
+# jobs already test x86_64 and aarch64. It zeroes the ccache stats first, and prints them at the end.
 #
 # Examples:
 #   ./auto/qemu.sh riscv64
@@ -50,6 +55,7 @@
 #   ./auto/qemu.sh riscv64 shell
 #   ./auto/qemu.sh all
 #   ST_QEMU_JOBS=4 ./auto/qemu.sh all utest
+#   ST_QEMU_CPUS="mips mipsel" ./auto/qemu.sh all
 #
 # In the shell, the variables are those of the runs, CC, CXX, AR, LD, RANLIB, TARGETDIR and ST_TOOL_RUN, plus:
 #   ST_QEMU_USER     the qemu-user binary of the CPU, such as qemu-riscv64
@@ -106,6 +112,18 @@ build_image() {
     done
 }
 
+# The ccache folder on the host, mounted at /ccache in every container. CCACHE_MAXSIZE passes through when set.
+CCACHE_HOST=${ST_QEMU_CCACHE:-$HOME/.cache/st-qemu-ccache}
+CCACHE_ARGS="-v $CCACHE_HOST:/ccache -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE"
+if [[ -z $ST_QEMU_CONTAINER ]]; then
+    mkdir -p "$CCACHE_HOST" || exit 1
+fi
+
+# Run ccache with the arguments in the cross image, on the cache of the host.
+ccache_run() {
+    docker run --rm --user "$(id -u):$(id -g)" $CCACHE_ARGS st-qemu:$HASH ccache "$@"
+}
+
 # Every CPU at once, on the host: build the images first, so the CPUs only use them, then run this script for
 # each CPU in the background, at most ST_QEMU_JOBS at once, each with its own log. Then print a summary.
 if [[ $CPU == all && -z $ST_QEMU_CONTAINER ]]; then
@@ -114,17 +132,22 @@ if [[ $CPU == all && -z $ST_QEMU_CONTAINER ]]; then
         all) RUNS="utest tools tools-malloc asan" ;;
         *) usage ;;
     esac
+    ALL_CPUS=${ST_QEMU_CPUS:-$CPUS}
+    for cpu in $ALL_CPUS; do
+        [[ " $CPUS " == *" $cpu "* ]] || usage
+    done
     image_hash || exit 1
     build_image st-qemu:$HASH cross "" || exit 1
-    if [[ $(docker version --format '{{.Server.Arch}}') != amd64 ]]; then
+    if [[ " $ALL_CPUS " == *" x86_64 "* && $(docker version --format '{{.Server.Arch}}') != amd64 ]]; then
         build_image st-qemu:$HASH-amd64 amd64 "--platform linux/amd64" || exit 1
     fi
 
     JOBS=${ST_QEMU_JOBS:-5}
     rm -rf /tmp/st-qemu-all
     mkdir -p /tmp/st-qemu-all || exit 1
+    ccache_run -z >/dev/null || exit 1
     start=$(date +%s)
-    for cpu in $CPUS; do
+    for cpu in $ALL_CPUS; do
         while [[ $(jobs -pr | wc -l) -ge $JOBS ]]; do
             sleep 1
         done
@@ -146,7 +169,7 @@ if [[ $CPU == all && -z $ST_QEMU_CONTAINER ]]; then
         printf " %-13s" $run
     done
     printf " %s\n" seconds
-    for cpu in $CPUS; do
+    for cpu in $ALL_CPUS; do
         log=/tmp/st-qemu-all/$cpu.log
         code=$(sed -n 's/^EXIT \([0-9]*\) [0-9]*$/\1/p' $log | tail -1)
         seconds=$(sed -n 's/^EXIT [0-9]* \([0-9]*\)$/\1/p' $log | tail -1)
@@ -167,6 +190,8 @@ if [[ $CPU == all && -z $ST_QEMU_CONTAINER ]]; then
         printf " %s\n" "${seconds:--}s"
     done
     echo "Wall time ${wall}s, at most $JOBS CPUs at once; the CPUs took ${total}s in all."
+    echo "ccache, $CCACHE_HOST:"
+    ccache_run -s | sed 's/^/  /'
 
     for cpu in $FAILED; do
         echo
@@ -226,10 +251,10 @@ if [[ -z $ST_QEMU_CONTAINER ]]; then
         fi
     fi
     exec docker run --rm $TTY $PLATFORM -e ST_QEMU_CONTAINER=1 --user "$(id -u):$(id -g)" \
-        -v "$(pwd)":/st -w /st $IMAGE bash auto/qemu.sh "$CPU" "$WHAT" "${@:3}"
+        $CCACHE_ARGS -v "$(pwd)":/st -w /st $IMAGE bash auto/qemu.sh "$CPU" "$WHAT" "${@:3}"
 fi
 
-export CC=$TRIPLE-gcc$SUFFIX CXX=$TRIPLE-g++$SUFFIX AR=$TRIPLE-ar LD=$TRIPLE-ld RANLIB=$TRIPLE-ranlib
+export CC="ccache $TRIPLE-gcc$SUFFIX" CXX="ccache $TRIPLE-g++$SUFFIX" AR=$TRIPLE-ar LD=$TRIPLE-ld RANLIB=$TRIPLE-ranlib
 export TARGETDIR=LINUX_${CPU}_qemu_DBG
 ST_TOOL_RUN=
 if [[ $(uname -m) != "$MACHINE" ]]; then

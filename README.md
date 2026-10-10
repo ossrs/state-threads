@@ -261,8 +261,10 @@ ST_QEMU_JOBS=10 ./auto/qemu.sh all utest
 It builds the images once, then runs each CPU in its own container, at most `ST_QEMU_JOBS` at once (5 by
 default), with its output in `/tmp/st-qemu-all/<cpu>.log`. At the end it prints a summary, one row per CPU with
 `PASS` or `FAIL` and the seconds of each run, and the wall time, then the end of the log of each CPU that failed,
-and exits 1 when any CPU failed. CI runs `./auto/qemu.sh all` in the `actions-test-qemu` job, on an amd64
-runner, where `x86_64` runs natively.
+and exits 1 when any CPU failed. `ST_QEMU_CPUS` picks the CPUs, such as `ST_QEMU_CPUS="mips mipsel" ./auto/qemu.sh all`. Every compile goes
+through ccache, with its cache in `~/.cache/st-qemu-ccache` (or `ST_QEMU_CCACHE`), so a second run compiles
+only what changed; `all` ends with the ccache stats. CI runs the eight CPUs that no native job runs, four in
+each of the `actions-test-qemu-misc` and `actions-test-qemu-mips` jobs, with the ccache kept between runs.
 
 To build, run and debug a CPU by hand, `./auto/qemu.sh <cpu> shell` opens a bash in the image with the CPU's
 toolchain exported. The image has `gdb-multiarch`: start the program under the gdb stub of qemu-user, then
