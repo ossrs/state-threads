@@ -86,9 +86,13 @@ VOID TEST(RandomizeStacksTest, SwitchReturnsPrevious)
 // Without randomization every coroutine's stack starts at the same place within its page, so the frame of the same
 // function sits at the same page offset in each one. With randomization on, new coroutines put it at different
 // offsets, each shifted by a multiple of 16 bytes so the stack stays aligned, and each coroutine runs normally.
-// Locks in current behavior.
+// Locks in current behavior. With MALLOC_STACK, malloc chooses where each stack starts within its page, a different
+// offset for each stack on Linux and Windows, so the page offset of the frame doesn't show ST's offset.
 VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
 {
+#ifdef MALLOC_STACK
+    GTEST_SKIP() << "malloc chooses the page offset of each stack with MALLOC_STACK";
+#else
     const int n = 16;
     uintptr_t pagesize = (uintptr_t)getpagesize();
 
@@ -118,6 +122,7 @@ VOID TEST(RandomizeStacksTest, StacksStartAtDifferentOffsets)
     }
     st_randomize_stacks(0);
     EXPECT_GT(moved, 0);
+#endif
 }
 
 #ifndef _WIN32 // POSIX only: mmap, mprotect interposition with dlsym, pipes

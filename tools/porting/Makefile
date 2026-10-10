@@ -1,13 +1,18 @@
 .PHONY: clean
 
+include ../tool.mk
+
 CFLAGS=-g -O0
 
 OS_NAME 	= $(shell uname -s)
 ST_TARGET 	= linux-debug
 ifeq ($(OS_NAME), Darwin)
 ST_TARGET	= darwin-debug
+# The CPU to build for: CPU_ARCHS from the environment, such as x86_64 on Apple Silicon, or the host CPU.
+ifndef CPU_ARCHS
 CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
 CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+endif
 CFLAGS      += -arch $(CPU_ARCHS)
 endif
 
@@ -28,7 +33,7 @@ EXE         = .exe
 CLEAN_FILES += porting.exe porting.obj porting.ilk porting.pdb
 endif
 
-./porting$(EXE):  porting.c
+$(BIN_DIR)/porting$(EXE):  porting.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(WARNFLAGS) $(LINK_OUT)$@ $^ $(LDLIBS)
 
 clean:

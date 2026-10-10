@@ -1,14 +1,19 @@
 .PHONY: clean
 
-LDLIBS=../../obj/libst.a
-CFLAGS=-g -O0 -I../../obj
+include ../tool.mk
+
+LDLIBS=$(ST_OBJ_DIR)/libst.a
+CFLAGS=-g -O0 -I$(ST_OBJ_DIR)
 
 OS_NAME 	= $(shell uname -s)
 ST_TARGET 	= linux-debug
 ifeq ($(OS_NAME), Darwin)
 ST_TARGET	= darwin-debug
+# The CPU to build for: CPU_ARCHS from the environment, such as x86_64 on Apple Silicon, or the host CPU.
+ifndef CPU_ARCHS
 CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
 CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+endif
 CFLAGS      += -arch $(CPU_ARCHS)
 endif
 
@@ -24,14 +29,14 @@ CLEAN_FILES = verify verify.dSYM
 ifneq ($(filter MINGW% MSYS%,$(OS_NAME)),)
 ST_TARGET   = win64-debug
 CC          = cl
-CFLAGS      = -nologo -Z7 -Od -I../../obj
+CFLAGS      = -nologo -Z7 -Od -I$(ST_OBJ_DIR)
 WARNFLAGS   = -W4
 LINK_OUT    = -Fe
 EXE         = .exe
 CLEAN_FILES += verify.exe verify.obj verify.ilk verify.pdb
 endif
 
-./verify$(EXE):  verify.c $(LDLIBS)
+$(BIN_DIR)/verify$(EXE):  verify.c $(LDLIBS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(WARNFLAGS) $(LINK_OUT)$@ $< $(LDLIBS)
 
 clean:

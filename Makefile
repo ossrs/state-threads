@@ -33,7 +33,7 @@
 # GPL.
 
 # This is the full version of the libst library - modify carefully
-VERSION     = 1.9.2
+VERSION     = 1.9.3
 
 ##########################
 # Supported OSes:
@@ -46,11 +46,13 @@ VERSION     = 1.9.2
 # possible compilation options.
 ##########################
 
-CC          = cc
-CXX         = g++
-AR          = ar
-LD          = ld
-RANLIB      = ranlib
+# The toolchain and TARGETDIR come from the environment when it sets them, such as a cross
+# toolchain for another CPU, as auto/qemu.sh does.
+CC          ?= cc
+CXX         ?= g++
+AR          ?= ar
+LD          ?= ld
+RANLIB      ?= ranlib
 LN          = ln
 STATIC_ONLY = yes
 
@@ -58,7 +60,7 @@ SHELL       = /bin/sh
 ECHO        = /bin/echo
 
 BUILD       = DBG
-TARGETDIR   = $(OS)_$(shell uname -r)_$(BUILD)
+TARGETDIR   ?= $(OS)_$(shell uname -r)_$(BUILD)
 
 # For Cygwin, it pass a default OS env, we ignore it.
 ifeq ($(OS), Windows_NT)
@@ -111,8 +113,11 @@ EXTRA_OBJS  = $(TARGETDIR)/md_darwin.o
 LD          = cc
 SFLAGS      = -fPIC -fno-common
 DSO_SUFFIX  = dylib
+# The CPU to build for: CPU_ARCHS from the environment, such as x86_64 on Apple Silicon, or the host CPU.
+ifndef CPU_ARCHS
 CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
 CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+endif
 CFLAGS      += -arch $(CPU_ARCHS)
 LDFLAGS     += -arch $(CPU_ARCHS)
 LDFLAGS     += -dynamiclib -install_name /sw/lib/libst.$(MAJOR).$(DSO_SUFFIX) -compatibility_version $(MAJOR) -current_version $(VERSION)
@@ -124,7 +129,9 @@ ifeq ($(OS), LINUX)
 EXTRA_OBJS  = $(TARGETDIR)/md_linux.o $(TARGETDIR)/md_linux2.o
 SFLAGS      = -fPIC
 LDFLAGS     = -shared -soname=$(SONAME) -lc
-OTHER_FLAGS = -Wall
+# Unwind tables, which GCC leaves out of C code on some CPUs, such as arm, so glibc backtrace() and C++
+# exceptions walk through the frames of ST up to the entry of a thread.
+OTHER_FLAGS = -Wall -funwind-tables
 DEFINES     += -DMD_HAVE_EPOLL -DMD_HAVE_SELECT
 endif
 
@@ -271,7 +278,13 @@ endif
 ifeq ($(OS),)
 ST_ALL      = unknown
 else
-ST_ALL      = $(TARGETDIR) $(LIBRARIES) $(HEADER) $(DESC) obj-link
+ST_ALL      = $(TARGETDIR) $(LIBRARIES) $(HEADER)
+# When the environment or the command line sets TARGETDIR, as auto/qemu.sh does, the caller uses that folder, and the
+# build writes nothing outside it, neither the obj link nor st.pc, so builds for several CPUs can run at once in one
+# checkout. Otherwise obj points at TARGETDIR.
+ifeq ($(filter environment command,$(firstword $(origin TARGETDIR))),)
+ST_ALL      += $(DESC) obj-link
+endif
 endif
 
 all: $(ST_ALL)

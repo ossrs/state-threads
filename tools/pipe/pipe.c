@@ -260,7 +260,9 @@ static int pipe_fill(void)
 
     /* With nothing to read, st_read times out. */
     char c;
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_read(r, &c, 1, SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);

@@ -228,6 +228,66 @@ The `exception` tool is C++: it throws and catches C++ exceptions on coroutine s
 raises and catches SEH exceptions there. Windows builds C++ exceptions on SEH, which rejects frames outside
 the stack bounds in the TIB, so this works only because ST switches those bounds with each coroutine stack.
 
+## Every CPU: QEMU and Rosetta
+
+Every CPU starts a new coroutine in a small assembly entry, `_st_md_thread_start`; read
+[docs/coroutine_entry.md](docs/coroutine_entry.md) for how. To test the CPUs this machine cannot run, build
+for them and run the utest and the tools with QEMU user mode, in Docker:
+
+```bash
+./auto/qemu.sh riscv64
+./auto/qemu.sh mips utest
+```
+
+The CPUs are `x86_64`, `aarch64`, `i386`, `arm`, `riscv64`, `loongarch64`, `mips`, `mipsel`, `mips64`, and
+`mips64el`. The second argument picks `utest`, `tools` (`auto/tools.sh`), `tools-malloc` (with
+`EXTRA_CFLAGS=-DMALLOC_STACK`), `asan` (the utest and the tools with ASAN, in `LINUX_<cpu>_asan_DBG`), or
+`all`, the default. The script builds a local Docker image from `auto/qemu/Dockerfile` (the cross compilers of
+Ubuntu 24.04, and the static `qemu-user` 10.2 of Ubuntu 26.04) when it is missing. Its tag, `st-qemu:<hash>`, is
+a short hash of the files in `auto/qemu/`, so editing the Dockerfile builds a new image; the script then removes
+the older ones, except one that a container still uses. It builds everything in place in `LINUX_<cpu>_qemu_DBG`, the utest and the tools too, and
+leaves the `obj` link alone, so two CPUs can run at once in one checkout. It prints one
+`RESULT <cpu> <run> PASS|FAIL` line per run. A CPU that is the container's own runs natively. On a Docker host
+of another CPU, such as Apple Silicon, `x86_64` runs in an amd64 container, `st-qemu:<hash>-amd64`, which
+Docker emulates as a whole. Every other CPU runs with qemu-user, which is slower than the real CPU, and skips `asan` with a `SKIP` line.
+
+To test every CPU at once, use `all` instead of a CPU, with the same second argument:
+
+```bash
+./auto/qemu.sh all
+ST_QEMU_JOBS=10 ./auto/qemu.sh all utest
+```
+
+It builds the images once, then runs each CPU in its own container, at most `ST_QEMU_JOBS` at once (5 by
+default), with its output in `/tmp/st-qemu-all/<cpu>.log`. At the end it prints a summary, one row per CPU with
+`PASS` or `FAIL` and the seconds of each run, and the wall time, then the end of the log of each CPU that failed,
+and exits 1 when any CPU failed. `ST_QEMU_CPUS` picks the CPUs, such as `ST_QEMU_CPUS="mips mipsel" ./auto/qemu.sh all`. Every compile goes
+through ccache, with its cache in `~/.cache/st-qemu-ccache` (or `ST_QEMU_CCACHE`), so a second run compiles
+only what changed; `all` ends with the ccache stats. CI runs the eight CPUs that no native job runs, four in
+each of the `actions-test-qemu-misc` and `actions-test-qemu-mips` jobs, with the ccache kept between runs.
+
+To build, run and debug a CPU by hand, `./auto/qemu.sh <cpu> shell` opens a bash in the image with the CPU's
+toolchain exported. The image has `gdb-multiarch`: start the program under the gdb stub of qemu-user, then
+attach to it, as the header of `auto/qemu.sh` shows:
+
+```bash
+./auto/qemu.sh riscv64 shell
+make linux-debug && make -C tools/backtrace && cd $TARGETDIR/tools/backtrace
+$ST_QEMU_USER -g 1234 -L $ST_QEMU_SYSROOT ./backtrace &
+gdb-multiarch -ex "set sysroot $ST_QEMU_SYSROOT" -ex "target remote :1234" -ex "break _st_md_thread_start" \
+    -ex continue -ex bt ./backtrace
+```
+
+On macOS, build and run for either CPU; on Apple Silicon, x86_64 runs under Rosetta 2:
+
+```bash
+./auto/darwin.sh arm64
+./auto/darwin.sh x86_64
+```
+
+It takes the same second argument, and builds everything in place in `DARWIN_<cpu>_DBG`. For Windows x64,
+run the utest and the tools natively, as in [Windows: UTest](#windows-utest) and [Windows: Tools](#windows-tools).
+
 ## Linux: Coverage
 
 > Note: We use [Google test](https://github.com/google/googletest/releases/tag/release-1.11.0) in `utest/gtest-fit`.

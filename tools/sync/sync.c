@@ -244,7 +244,9 @@ static int timedwait(void)
 {
     CHECK((timed_cond = st_cond_new()) != NULL);
 
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_cond_timedwait(timed_cond, TIMEOUT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= TIMEOUT_US);

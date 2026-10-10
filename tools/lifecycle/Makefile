@@ -1,14 +1,19 @@
 .PHONY: clean
 
-LDLIBS=../../obj/libst.a -lpthread
-CFLAGS=-g -O0 -I../../obj -I.. -DDEBUG
+include ../tool.mk
+
+LDLIBS=$(ST_OBJ_DIR)/libst.a -lpthread
+CFLAGS=-g -O0 -I$(ST_OBJ_DIR) -I.. -DDEBUG
 
 OS_NAME 	= $(shell uname -s)
 ST_TARGET 	= linux-debug
 ifeq ($(OS_NAME), Darwin)
 ST_TARGET	= darwin-debug
+# The CPU to build for: CPU_ARCHS from the environment, such as x86_64 on Apple Silicon, or the host CPU.
+ifndef CPU_ARCHS
 CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
 CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+endif
 CFLAGS      += -arch $(CPU_ARCHS)
 endif
 
@@ -22,17 +27,17 @@ CLEAN_FILES = lifecycle lifecycle.dSYM
 # PowerShell with the MSVC environment on PATH, where uname -s is MINGW64_NT-* or MSYS_NT-*. The library
 # brings ws2_32.lib itself.
 ifneq ($(filter MINGW% MSYS%,$(OS_NAME)),)
-LDLIBS      = ../../obj/libst.a
+LDLIBS      = $(ST_OBJ_DIR)/libst.a
 ST_TARGET   = win64-debug
 CC          = cl
-CFLAGS      = -nologo -Z7 -Od -I../../obj -I.. -DDEBUG
+CFLAGS      = -nologo -Z7 -Od -I$(ST_OBJ_DIR) -I.. -DDEBUG
 WARNFLAGS   = -W4
 LINK_OUT    = -Fe
 EXE         = .exe
 CLEAN_FILES += lifecycle.exe lifecycle.obj lifecycle.ilk lifecycle.pdb
 endif
 
-./lifecycle$(EXE): lifecycle.c ../tool.h $(LDLIBS)
+$(BIN_DIR)/lifecycle$(EXE): lifecycle.c ../tool.h $(LDLIBS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(WARNFLAGS) $(LINK_OUT)$@ $< $(LDLIBS)
 
 clean:

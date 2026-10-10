@@ -32,6 +32,15 @@ jobs:
         run: |
           EXTRA_CFLAGS="-DMALLOC_STACK -DMD_ASAN -fsanitize=address -fno-omit-frame-pointer" \
               LDFLAGS=-fsanitize=address ./auto/tools.sh
+      - name: Run ST utest with ASAN
+        if: matrix.name == 'linux-x64'
+        run: |
+          # In a build folder of its own, because the gtest objects do not follow the flags.
+          export TARGETDIR=LINUX_asan_DBG
+          FLAGS="-DMALLOC_STACK -DMD_ASAN -fsanitize=address -fno-omit-frame-pointer"
+          make -B linux-debug EXTRA_CFLAGS="$FLAGS"
+          make -C utest EXTRA_CFLAGS="$FLAGS" UTEST_FLAGS=-fsanitize=address
+          ./$TARGETDIR/st_utest
 
   coverage:
     name: actions-test-coverage
@@ -122,18 +131,52 @@ jobs:
           make win64-optimized
           test -f obj/libst.a
 
+  # The Linux CPUs that no native job runs, cross-built and run with qemu-user by auto/qemu.sh; the utest
+  # jobs above test x86_64 and aarch64. Two jobs of four CPUs, each on its own runner, because the
+  # compiles fill a runner's four cores. ccache keeps the objects between runs, so a run compiles only
+  # what changed; the summary of auto/qemu.sh ends with the ccache stats.
+  qemu:
+    name: actions-test-qemu-${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: misc, cpus: "i386 arm riscv64 loongarch64" }
+          - { name: mips, cpus: "mips mipsel mips64 mips64el" }
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/st-qemu-ccache
+          key: st-qemu-ccache-${{ matrix.name }}-${{ github.sha }}
+          restore-keys: st-qemu-ccache-${{ matrix.name }}-
+
+      ################################################################
+      # Tests
+      - name: Run ST utest and tools with QEMU
+        timeout-minutes: 30
+        env:
+          ST_QEMU_CPUS: ${{ matrix.cpus }}
+          CCACHE_MAXSIZE: 500M
+        run: ./auto/qemu.sh all
+
   # The single check to require for merging. It runs even when a needed job
   # fails, because a skipped required check counts as passed.
   final:
     name: actions-test-final
     runs-on: ubuntu-24.04
-    needs: [utest, coverage, windows]
+    needs: [utest, coverage, windows, qemu]
     if: always()
 
     steps:
       - name: Check all jobs succeeded
         run: |
-          echo "utest: ${{ needs.utest.result }}, coverage: ${{ needs.coverage.result }}, windows: ${{ needs.windows.result }}"
+          echo "utest: ${{ needs.utest.result }}, coverage: ${{ needs.coverage.result }}, windows: ${{ needs.windows.result }}, qemu: ${{ needs.qemu.result }}"
           test "${{ needs.utest.result }}" = success
           test "${{ needs.coverage.result }}" = success
           test "${{ needs.windows.result }}" = success
+          test "${{ needs.qemu.result }}" = success

@@ -65,20 +65,48 @@ typedef struct _st_jmp_buf {
      * Linux    __i386__                long[6]
      * Linux    __amd64__/__x86_64__    long[8]
      * Linux    __aarch64__             long[22]
-     * Linux    __arm__                 long[16]
-     * Linux    __mips__/__mips64       long[13]
-     * Linux    __riscv                 long[14]
-     * Linux    __loongarch64           long[12]
+     * Linux    __arm__                 long[38], 16 of them VFP d8-d15, 12 of them iWMMXt wr10-wr15
+     * Linux    __mips64                long[20], 8 of them FP registers
+     * Linux    __mips__                long[24], 12 of them 6 FP doubles, 8-byte aligned
+     * Linux    __riscv                 long[26], 12 of them FP registers
+     * Linux    __loongarch64           long[20], 8 of them FP registers
      * Cygwin64 __amd64__/__x86_64__    long[8]
      * Win64    _M_X64                  long long[36]
      */
     /* Pointer-sized slots, because MSVC long is 32-bit (LLP64). */
 #if defined(WIN64)
     intptr_t __jmpbuf[36];
+#elif defined(__riscv)
+    intptr_t __jmpbuf[26];
+#elif defined(__arm__)
+    intptr_t __jmpbuf[38];
+#elif defined(__mips__) && !defined(__mips64)
+    /* The o32 save stores doubles with sdc1, which needs an 8-byte aligned address. */
+    intptr_t __jmpbuf[24] __attribute__((aligned(8)));
 #else
     intptr_t __jmpbuf[22];
 #endif
 } _st_jmp_buf_t[1];
+
+#if defined(__arm__)
+    /*
+     * The arm _st_md_cxt_save in md_linux2.S stores 10 core registers, then d8-d15 with VFP, then wr10-wr15 with
+     * iWMMXt. A jmpbuf too small for that lets every save overwrite what follows it, the keys of the thread.
+     */
+    #define MD_ARM_JB_CORE_BYTES (10 * 4)
+    #ifdef __VFP_FP__
+        #define MD_ARM_JB_VFP_BYTES (8 * 8)
+    #else
+        #define MD_ARM_JB_VFP_BYTES 0
+    #endif
+    #ifdef __IWMMXT__
+        #define MD_ARM_JB_IWMMXT_BYTES (6 * 8)
+    #else
+        #define MD_ARM_JB_IWMMXT_BYTES 0
+    #endif
+    typedef char _st_md_jmpbuf_holds_the_save[
+        sizeof(_st_jmp_buf_t) >= MD_ARM_JB_CORE_BYTES + MD_ARM_JB_VFP_BYTES + MD_ARM_JB_IWMMXT_BYTES ? 1 : -1];
+#endif
 
 /* Defined in *.S file and implemented by ASM. */
 extern int _st_md_cxt_save(_st_jmp_buf_t env);
@@ -93,6 +121,11 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
  * Platform specifics
  */
 
+/*
+ * Each OS and CPU defines MD_GET_SP, MD_GET_PC and MD_GET_FP, the slots of the saved stack pointer, the
+ * address _st_md_cxt_restore jumps to, and the frame pointer, in the jmpbuf of a thread.
+ */
+
 #if defined (DARWIN)
 
     #define MD_USE_BSD_ANON_MMAP
@@ -101,8 +134,39 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
 
     #if defined(__amd64__) || defined(__x86_64__)
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[6]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[7]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_darwin.S), which calls _st_thread_main.
+         * The SP (slot 6) moves 16-byte aligned minus 8 to a null return address, as at a function
+         * entry, the PC (slot 7) is set, and the frame pointer rbp (slot 1) is null, which ends the
+         * frame-pointer walk of backtrace().
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                               \
+            char *_sp = (char *)(intptr_t)MD_GET_SP(_t);                    \
+            _sp = (char *)((intptr_t)_sp & ~(intptr_t)15) - sizeof(void *); \
+            *(void **)_sp = NULL;                                           \
+            MD_GET_SP(_t) = (long)(intptr_t)_sp;                            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;            \
+            MD_GET_FP(_t) = 0;                                              \
+        } while (0)
     #elif defined(__aarch64__)
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[13]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[11]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[10]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_darwin.S), which calls _st_thread_main.
+         * The SP (slot 13) is 16-byte aligned, the PC is the link register (slot 11) that the
+         * restore returns to, and the frame pointer x29 (slot 10) is null, which ends the
+         * frame-pointer walk of backtrace().
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)15);            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #else
         #error Unknown CPU architecture
     #endif
@@ -147,26 +211,139 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
 
     #if defined(__i386__)
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[4]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[5]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[3]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux.S), which calls _st_thread_main.
+         * The SP (slot 4) moves 16-byte aligned minus 4 to a null return address, as at a function
+         * entry, the PC (slot 5) is set, and the frame pointer ebp (slot 3) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                               \
+            char *_sp = (char *)(intptr_t)MD_GET_SP(_t);                    \
+            _sp = (char *)((intptr_t)_sp & ~(intptr_t)15) - sizeof(void *); \
+            *(void **)_sp = NULL;                                           \
+            MD_GET_SP(_t) = (long)(intptr_t)_sp;                            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;            \
+            MD_GET_FP(_t) = 0;                                              \
+        } while (0)
     #elif defined(__amd64__) || defined(__x86_64__)
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[6]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[7]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux.S), which calls _st_thread_main.
+         * The SP (slot 6) moves 16-byte aligned minus 8 to a null return address, as at a function
+         * entry, the PC (slot 7) is set, and the frame pointer rbp (slot 1) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                               \
+            char *_sp = (char *)(intptr_t)MD_GET_SP(_t);                    \
+            _sp = (char *)((intptr_t)_sp & ~(intptr_t)15) - sizeof(void *); \
+            *(void **)_sp = NULL;                                           \
+            MD_GET_SP(_t) = (long)(intptr_t)_sp;                            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;            \
+            MD_GET_FP(_t) = 0;                                              \
+        } while (0)
     #elif defined(__aarch64__)
         /* https://github.com/ossrs/state-threads/issues/9 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[13]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[11]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[10]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 13) is 16-byte aligned, the PC is the link register (slot 11) that the
+         * restore branches to, and the frame pointer x29 (slot 10) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)15);            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #elif defined(__arm__)
         /* https://github.com/ossrs/state-threads/issues/1#issuecomment-244648573 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[8]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[9]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[7]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 8) is 8-byte aligned, the PC is the link register (slot 9) that the restore
+         * branches to with bx, so the address of the entry also picks ARM or Thumb, and the frame
+         * pointer r11 (slot 7) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)7);             \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #elif defined(__mips64)
         /* https://github.com/ossrs/state-threads/issues/21 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[11]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 0) is 16-byte aligned, the PC is the return address ra (slot 1) that the
+         * restore jumps to, and the frame pointer fp (slot 11) is null. The gp (slot 2) is not
+         * used: the entry computes its own.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)15);            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #elif defined(__mips__)
         /* https://github.com/ossrs/state-threads/issues/21 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[11]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 0) is 8-byte aligned as o32 wants, the PC is the return address ra (slot 1)
+         * that the restore jumps to, and the frame pointer fp (slot 11) is null. The gp (slot 2) is
+         * not used: the entry computes its own.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)7);             \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #elif defined(__riscv)
         /* https://github.com/ossrs/state-threads/pull/28 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[2]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 0) is 16-byte aligned, the PC is the return address ra (slot 1) that the
+         * restore jumps to, and the frame pointer s0 (slot 2) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)15);            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #elif defined(__loongarch64)
         /* https://github.com/ossrs/state-threads/issues/24 */
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[0]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[2]))
+        /*
+         * A new thread starts in _st_md_thread_start (md_linux2.S), which calls _st_thread_main.
+         * The SP (slot 0) is 16-byte aligned, the PC is the return address ra (slot 1) that the
+         * restore jumps to, and the frame pointer fp (slot 2) is null.
+         */
+        extern void _st_md_thread_start(void);
+        #define MD_INIT_THREAD_ENTRY(_t) do {                                           \
+            MD_GET_SP(_t) = (long)((intptr_t)MD_GET_SP(_t) & ~(intptr_t)15);            \
+            MD_GET_PC(_t) = (long)(intptr_t)_st_md_thread_start;                        \
+            MD_GET_FP(_t) = 0;                                                          \
+        } while (0)
     #else
         #error "Unknown CPU architecture"
     #endif
@@ -180,6 +357,8 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
 
     #if defined(__amd64__) || defined(__x86_64__)
         #define MD_GET_SP(_t) *((long *)&((_t)->context[0].__jmpbuf[6]))
+        #define MD_GET_PC(_t) *((long *)&((_t)->context[0].__jmpbuf[7]))
+        #define MD_GET_FP(_t) *((long *)&((_t)->context[0].__jmpbuf[1]))
     #else
         #error Unknown CPU architecture
     #endif
@@ -212,6 +391,8 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
 
     #if defined(_M_X64) || defined(_M_AMD64)
         #define MD_GET_SP(_t) *((long long *)&((_t)->context[0].__jmpbuf[8]))
+        #define MD_GET_PC(_t) *((long long *)&((_t)->context[0].__jmpbuf[9]))
+        #define MD_GET_FP(_t) *((long long *)&((_t)->context[0].__jmpbuf[1]))
         /*
          * The TIB stack bounds of a new thread, restored from slots 10-12 by md_win64.asm:
          * StackBase is the stack top, StackLimit and DeallocationStack are the stack bottom.
@@ -227,7 +408,8 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
          * A new thread starts in _st_md_thread_start (md_win64.asm), which calls _st_thread_main,
          * instead of after _st_md_cxt_save in st_thread_create, so it does not depend on how the
          * compiler uses that frame and its registers there. The SP (slot 8) moves 16-byte aligned
-         * minus 8 to a null return address, as at a function entry, and the PC (slot 9) is set.
+         * minus 8 to a null return address, as at a function entry, the PC (slot 9) is set, and the
+         * frame pointer rbp (slot 1) is null, not the creator's.
          */
         extern void _st_md_thread_start(void);
         #define MD_INIT_THREAD_ENTRY(_t) do {                                       \
@@ -235,7 +417,8 @@ extern void _st_md_cxt_restore(_st_jmp_buf_t env, int val);
             _sp = (char *)((intptr_t)_sp & ~(intptr_t)15) - sizeof(void *);         \
             *(void **)_sp = NULL;                                                   \
             MD_GET_SP(_t) = (long long)(intptr_t)_sp;                               \
-            (_t)->context[0].__jmpbuf[9] = (long long)(intptr_t)_st_md_thread_start; \
+            MD_GET_PC(_t) = (long long)(intptr_t)_st_md_thread_start;               \
+            MD_GET_FP(_t) = 0;                                                      \
         } while (0)
     #else
         #error Unknown CPU architecture

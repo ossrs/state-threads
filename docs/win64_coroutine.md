@@ -1,9 +1,10 @@
 # How coroutines work on native Windows x64
 
 This note explains how State Threads switches and starts threads (coroutines) on native Windows x64 with
-MSVC (`WIN64`), and why a new thread starts in an assembly entry, `_st_md_thread_start`, instead of the way
-it starts on Linux and macOS. The code is in `md_win64.asm`, the `WIN64` branch of `md.h`, and
-`st_thread_create` in `sched.c`.
+MSVC (`WIN64`), and why a new thread starts in an assembly entry, `_st_md_thread_start`, instead of
+returning a second time from a context save. The code is in `md_win64.asm`, the `WIN64` branch of `md.h`,
+and `st_thread_create` in `sched.c`. Windows x64 had the entry first; every Linux and macOS CPU has one now
+too, described in [coroutine_entry.md](coroutine_entry.md).
 
 ## A thread is a saved set of registers
 
@@ -46,7 +47,9 @@ continues inside a function that really runs on that stack.
 A new thread has never run, so it has never called `_st_md_cxt_save`; its first jmpbuf must be made up: a
 stack pointer into its new, empty stack, and a PC to start at.
 
-### Linux and macOS: save, then patch the SP
+### The old start: save, then patch the SP
+
+Before v1.9.3, Linux and macOS started a new thread like this, and Cygwin64 still does:
 
 ```c
 if (_st_md_cxt_save(thread->context)) {  /* 1. save the creator's registers */
@@ -71,9 +74,11 @@ in a register from before the save is right only if it is one of the callee-save
 loads back. The trick works only while the compiler emits nothing there but "if 1, call `_st_thread_main`".
 The C language does not promise that, and the compiler does not know that `_st_md_cxt_save` returns twice.
 
-On Linux it holds in practice: an access to a `__thread` variable such as `_st_this_thread` is one
+On Linux it held in practice: an access to a `__thread` variable such as `_st_this_thread` is one
 instruction (`mov %fs:offset` on x86-64, `tpidr_el0` on arm64), so there is nothing worth computing before
-the save, and GCC and Clang have generated safe code there for decades.
+the save, and GCC and Clang generated safe code there for decades. Still, the new thread inherited its
+creator's callee-saved registers, and its outermost frame was a frame of `st_thread_create` that was never
+called, so a stack walk had no clean end.
 
 On Windows it held only by luck. With `/O2` and with `/GL` (LTCG), MSVC inlines `_st_thread_main` into
 `st_thread_create`. A Windows TLS access takes several steps (`gs:[58h]`, the TLS array, `_tls_index`, the
@@ -83,14 +88,16 @@ registers are callee-saved; a spill to the stack would crash the new thread.
 
 ### Windows: start in an assembly entry
 
-On `WIN64`, `MD_INIT_THREAD_ENTRY` runs in `st_thread_create` after the SP is patched, and points the
-jmpbuf at a small function written in assembly, so no compiler decides what runs first on the new stack:
+On `WIN64`, `st_thread_create` calls the save only to fill the jmpbuf as a template, and then
+`MD_INIT_THREAD_ENTRY` points the jmpbuf at a small function written in assembly, so no compiler decides
+what runs first on the new stack:
 
 ```c
 sp = align_down(stack->sp, 16) - 8;  /* 8 mod 16, as at the entry of a function */
 *(void **)sp = NULL;                 /* a return address of 0 */
 jmpbuf[8] = sp;                      /* SP */
 jmpbuf[9] = _st_md_thread_start;     /* PC */
+jmpbuf[1] = 0;                       /* rbp, not the creator's */
 ```
 
 The new stack is then:
@@ -169,18 +176,20 @@ outermost frame. So a backtrace in a thread function has exactly three frames: t
 unhandled exception ends the process with its exception code instead of hanging.
 
 Linux has the same idea with DWARF `.eh_frame` instead of `.pdata`, but with no TIB check, and C++ code on
-a thread stack normally catches its exceptions inside the thread function.
+a thread stack normally catches its exceptions inside the thread function. See
+[coroutine_entry.md](coroutine_entry.md) for how the walk ends at the entry on Linux and macOS.
 
 ## Summary
 
-| | Linux and macOS | Windows x64 |
+| | Old start (save, then patch the SP) | Windows x64 |
 | --- | --- | --- |
 | PC of a new thread | In `st_thread_create`, after the save | `_st_md_thread_start`, in assembly |
 | SP of a new thread | The new stack top | The new stack top, aligned, with a return address of 0 |
 | First code on the new stack | The tail of `st_thread_create`, from the compiler | Four instructions written by hand |
 | Depends on the optimizer | Yes, in theory | No |
+| Frame pointer | The creator's | Null |
 | Stack walk at the top | Not defined | Ends at the return address of 0 |
 | Registers saved | `rbx`, `rbp`, `r12`-`r15`, `rsp`, PC | Also `rdi`, `rsi`, `xmm6`-`xmm15`, MXCSR, x87 control word, TIB bounds |
 
-Only `WIN64` defines `MD_INIT_THREAD_ENTRY` now; the other platforms keep the save-then-patch-SP trick. A
-later change may give every platform and CPU an assembly entry, so all start new threads the same way.
+Only Cygwin64 keeps the old start. Every other platform and CPU starts a new thread in an assembly entry,
+described in [coroutine_entry.md](coroutine_entry.md).

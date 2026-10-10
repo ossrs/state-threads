@@ -102,6 +102,29 @@
 
     /****************************************************************/
 
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the link register of the new thread's jmpbuf here, its
+     * SP at a 16-byte boundary, and its x29 at 0. So the first _st_md_cxt_restore of the thread
+     * branches here on the new stack, with none of its creator's frames. The undefined return
+     * address ends DWARF unwinds here, and the null x29 and x30 end frame-pointer walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 4
+    _st_md_thread_start:
+    	.cfi_startproc
+    	.cfi_undefined x30
+    	mov	x29, #0
+    	mov	x30, #0
+    	bl	_st_thread_main
+    	/* _st_thread_main calls st_thread_exit, which never returns. */
+    	brk	#0
+    	.cfi_endproc
+    	.size _st_md_thread_start, .-_st_md_thread_start
+
+    /****************************************************************/
+
 
 
 
@@ -192,6 +215,41 @@
 
     /****************************************************************/
 
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the link register of the new thread's jmpbuf here, its
+     * SP at an 8-byte boundary, and its fp at 0. So the first _st_md_cxt_restore of the thread
+     * branches here with bx on the new stack, with none of its creator's frames. The bl to
+     * _st_thread_main becomes a blx when the C code is Thumb.
+     *
+     * The entry pushes two null words, which keep the 8-byte alignment, and its EHABI unwind entry
+     * says they are the saved fp and lr. So the EHABI unwinder of glibc backtrace() and C++
+     * exceptions lists the entry as the last frame, and stops at its null return address. The
+     * undefined return address in the CFI ends DWARF unwinds here, such as gdb's, and the null fp,
+     * r7 (the frame pointer of Thumb code) and lr end frame-pointer walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 2
+    _st_md_thread_start:
+    	.fnstart
+    	.cfi_startproc
+    	.cfi_undefined lr
+    	mov	fp, #0
+    	mov	r7, #0
+    	mov	lr, #0
+    	.save	{fp, lr}
+    	push	{fp, lr}
+    	.cfi_adjust_cfa_offset 8
+    	bl	_st_thread_main
+    	/* _st_thread_main calls st_thread_exit, which never returns. */
+    	udf	#0
+    	.cfi_endproc
+    	.fnend
+    	.size _st_md_thread_start, .-_st_md_thread_start
+
+    /****************************************************************/
+
 
 
 
@@ -217,6 +275,27 @@
     #define JB_S9  11   /* S2-S11,  Saved register */
     #define JB_S10 12   /* S2-S11,  Saved register */
     #define JB_S11 13   /* S2-S11,  Saved register */
+    #define JB_FS0 14   /* FS0-FS11, Saved FP registers, when the CPU has them */
+    #define JB_FS1 15
+    #define JB_FS2 16
+    #define JB_FS3 17
+    #define JB_FS4 18
+    #define JB_FS5 19
+    #define JB_FS6 20
+    #define JB_FS7 21
+    #define JB_FS8 22
+    #define JB_FS9 23
+    #define JB_FS10 24
+    #define JB_FS11 25
+
+    /* Save the low 64 bits of FS0-FS11 with D, their 32 bits with only F, and nothing with soft float. */
+    #if defined(__riscv_flen) && __riscv_flen >= 64
+        #define FP_SAVE fsd
+        #define FP_LOAD fld
+    #elif defined(__riscv_flen) && __riscv_flen == 32
+        #define FP_SAVE fsw
+        #define FP_LOAD flw
+    #endif
 
 
     	.file "md_linux.S"
@@ -241,6 +320,20 @@
 	sd    s9,  JB_S9  * 8(a0)
 	sd    s10, JB_S10 * 8(a0)
 	sd    s11, JB_S11 * 8(a0)
+#if defined(FP_SAVE)
+	FP_SAVE fs0,  JB_FS0  * 8(a0)
+	FP_SAVE fs1,  JB_FS1  * 8(a0)
+	FP_SAVE fs2,  JB_FS2  * 8(a0)
+	FP_SAVE fs3,  JB_FS3  * 8(a0)
+	FP_SAVE fs4,  JB_FS4  * 8(a0)
+	FP_SAVE fs5,  JB_FS5  * 8(a0)
+	FP_SAVE fs6,  JB_FS6  * 8(a0)
+	FP_SAVE fs7,  JB_FS7  * 8(a0)
+	FP_SAVE fs8,  JB_FS8  * 8(a0)
+	FP_SAVE fs9,  JB_FS9  * 8(a0)
+	FP_SAVE fs10, JB_FS10 * 8(a0)
+	FP_SAVE fs11, JB_FS11 * 8(a0)
+#endif
 	li    a0,  0
 	jr    ra
     	.size _st_md_cxt_save, .-_st_md_cxt_save
@@ -266,9 +359,46 @@
 	ld        s9,  JB_S9  * 8(a0)
 	ld        s10, JB_S10 * 8(a0)
 	ld        s11, JB_S11 * 8(a0)
+#if defined(FP_LOAD)
+	FP_LOAD   fs0,  JB_FS0  * 8(a0)
+	FP_LOAD   fs1,  JB_FS1  * 8(a0)
+	FP_LOAD   fs2,  JB_FS2  * 8(a0)
+	FP_LOAD   fs3,  JB_FS3  * 8(a0)
+	FP_LOAD   fs4,  JB_FS4  * 8(a0)
+	FP_LOAD   fs5,  JB_FS5  * 8(a0)
+	FP_LOAD   fs6,  JB_FS6  * 8(a0)
+	FP_LOAD   fs7,  JB_FS7  * 8(a0)
+	FP_LOAD   fs8,  JB_FS8  * 8(a0)
+	FP_LOAD   fs9,  JB_FS9  * 8(a0)
+	FP_LOAD   fs10, JB_FS10 * 8(a0)
+	FP_LOAD   fs11, JB_FS11 * 8(a0)
+#endif
 	li        a0,  1
 	jr        ra
     	.size _st_md_cxt_restore, .-_st_md_cxt_restore
+
+    /****************************************************************/
+
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the return address of the new thread's jmpbuf here, its
+     * SP at a 16-byte boundary, and its s0 at 0. So the first _st_md_cxt_restore of the thread
+     * jumps here on the new stack, with none of its creator's frames. The undefined return
+     * address ends DWARF unwinds here, and the null s0 and ra end frame-pointer walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 2
+    _st_md_thread_start:
+    	.cfi_startproc
+    	.cfi_undefined ra
+	li        s0,  0
+	li        ra,  0
+	call      _st_thread_main
+	/* _st_thread_main calls st_thread_exit, which never returns. */
+	unimp
+    	.cfi_endproc
+    	.size _st_md_thread_start, .-_st_md_thread_start
 
     /****************************************************************/
 
@@ -286,8 +416,8 @@
      * Internal __jmp_buf layout
      */
     #define JB_SP  0    /* Stack pointer */
-    #define JB_RA  11   /* Return address */
-    #define JB_GP  1    /* Global pointer */
+    #define JB_RA  1    /* Return address */
+    #define JB_GP  2    /* Global pointer */
     #define JB_S0  3    /* S0-S7, Saved temporaries */
     #define JB_S1  4    /* S0-S7, Saved temporaries */
     #define JB_S2  5    /* S0-S7, Saved temporaries */
@@ -296,7 +426,15 @@
     #define JB_S5  8    /* S0-S7, Saved temporaries */
     #define JB_S6  9    /* S0-S7, Saved temporaries */
     #define JB_S7  10   /* S0-S7, Saved temporaries */
-    #define JB_FP  2    /* FP/S8 Frame pointer */
+    #define JB_FP  11   /* FP/S8 Frame pointer */
+    #define JB_F24 12   /* F24-F31, the callee-saved FP registers of n64 */
+    #define JB_F25 13
+    #define JB_F26 14
+    #define JB_F27 15
+    #define JB_F28 16
+    #define JB_F29 17
+    #define JB_F30 18
+    #define JB_F31 19
 
     	.file "md_linux.S"
     	.text
@@ -318,6 +456,16 @@
         sd $s6, 72($a0) /* Save s6 to env[9],  *(long*)($a0+72)=s6 */
         sd $s7, 80($a0) /* Save s7 to env[10], *(long*)($a0+80)=s7 */
         sd $fp, 88($a0) /* Save fp to env[11], *(long*)($a0+88) =fp */
+#if !defined(__mips_soft_float)
+        sdc1 $f24, JB_F24 * 8($a0)
+        sdc1 $f25, JB_F25 * 8($a0)
+        sdc1 $f26, JB_F26 * 8($a0)
+        sdc1 $f27, JB_F27 * 8($a0)
+        sdc1 $f28, JB_F28 * 8($a0)
+        sdc1 $f29, JB_F29 * 8($a0)
+        sdc1 $f30, JB_F30 * 8($a0)
+        sdc1 $f31, JB_F31 * 8($a0)
+#endif
         li $v0, 0       /* Set return value to 0 */
         jr $ra          /* Return */
 
@@ -342,10 +490,61 @@
         ld $s6, 72($a0) /* Load sp from env[9],  s6=*(long*)($a0+72) */
         ld $s7, 80($a0) /* Load sp from env[10], s7=*(long*)($a0+80) */
         ld $fp, 88($a0) /* Load sp from env[2],  fp=*(long*)($a0+88)  */
+#if !defined(__mips_soft_float)
+        ldc1 $f24, JB_F24 * 8($a0)
+        ldc1 $f25, JB_F25 * 8($a0)
+        ldc1 $f26, JB_F26 * 8($a0)
+        ldc1 $f27, JB_F27 * 8($a0)
+        ldc1 $f28, JB_F28 * 8($a0)
+        ldc1 $f29, JB_F29 * 8($a0)
+        ldc1 $f30, JB_F30 * 8($a0)
+        ldc1 $f31, JB_F31 * 8($a0)
+#endif
         li $v0, 1       /* Set return value to 1 */
         jr $ra          /* Return to the saved return address */
 
     	.size _st_md_cxt_restore, .-_st_md_cxt_restore
+
+    /****************************************************************/
+
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the return address of the new thread's jmpbuf here, its
+     * SP at a 16-byte boundary, and its fp at 0. So the first _st_md_cxt_restore of the thread
+     * jumps here on the new stack, with none of its creator's frames. The restore jumps by $ra and
+     * leaves $t9 and $gp to the creator, so the entry finds its own address with bal, computes its
+     * own $gp from it, and calls _st_thread_main through $t9, as PIC code expects. The undefined
+     * return address ends DWARF unwinds here, and the null fp and ra end frame-pointer walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 2
+    _st_md_thread_start:
+    	.cfi_startproc
+    	.cfi_undefined $ra
+    	/*
+    	 * Explicit relocations, not the .cpsetup and dla macros, because the file is assembled
+    	 * without -fPIC, which turns those macros into absolute addresses, but also goes into
+    	 * the shared library.
+    	 */
+    	.set push
+    	.set noreorder
+    	.set nomacro
+        bal 1f                                      /* ra = 1f, the address of the next label */
+        nop
+    1:  lui $gp, %hi(%neg(%gp_rel(1b)))             /* gp = the GOT pointer of this module, ... */
+        daddu $gp, $gp, $ra                         /* ... from ra, the run-time address of 1b */
+        daddiu $gp, $gp, %lo(%neg(%gp_rel(1b)))
+        ld $t9, %call16(_st_thread_main)($gp)       /* PIC callees compute their gp from t9 */
+        move $fp, $zero
+        move $ra, $zero
+        jalr $t9
+        nop
+        /* _st_thread_main calls st_thread_exit, which never returns. */
+        break
+    	.set pop
+    	.cfi_endproc
+    	.size _st_md_thread_start, .-_st_md_thread_start
 
     /****************************************************************/
 
@@ -363,8 +562,8 @@
      * Internal __jmp_buf layout
      */
     #define JB_SP  0    /* Stack pointer */
-    #define JB_RA  11   /* Return address */
-    #define JB_GP  1    /* Global pointer */
+    #define JB_RA  1    /* Return address */
+    #define JB_GP  2    /* Global pointer */
     #define JB_S0  3    /* S0-S7, Saved temporaries */
     #define JB_S1  4    /* S0-S7, Saved temporaries */
     #define JB_S2  5    /* S0-S7, Saved temporaries */
@@ -373,7 +572,19 @@
     #define JB_S5  8    /* S0-S7, Saved temporaries */
     #define JB_S6  9    /* S0-S7, Saved temporaries */
     #define JB_S7  10   /* S0-S7, Saved temporaries */
-    #define JB_FP  2    /* FP/S8 Frame pointer */
+    #define JB_FP  11   /* FP/S8 Frame pointer */
+    /*
+     * F20-F30 even, the callee-saved FP registers of o32, as doubles in two slots each. md.h aligns
+     * the jmpbuf to 8 bytes for sdc1. Saving the even registers as doubles is right for every o32 FP
+     * mode: with -mfp32 each holds the pair F20/F21 to F30/F31, and with -mfpxx or -mfp64 only the
+     * even registers are callee-saved.
+     */
+    #define JB_F20 12
+    #define JB_F22 14
+    #define JB_F24 16
+    #define JB_F26 18
+    #define JB_F28 20
+    #define JB_F30 22
 
     	.file "md_linux.S"
     	.text
@@ -395,6 +606,14 @@
         sw $s6, 36($a0) /* Save s6 to env[9],  *(long*)($a0+36)=s6 */
         sw $s7, 40($a0) /* Save s7 to env[10], *(long*)($a0+40)=s7 */
         sw $fp, 44($a0) /* Save fp to env[11], *(long*)($a0+44) =fp */
+#if !defined(__mips_soft_float)
+        sdc1 $f20, JB_F20 * 4($a0)
+        sdc1 $f22, JB_F22 * 4($a0)
+        sdc1 $f24, JB_F24 * 4($a0)
+        sdc1 $f26, JB_F26 * 4($a0)
+        sdc1 $f28, JB_F28 * 4($a0)
+        sdc1 $f30, JB_F30 * 4($a0)
+#endif
         li $v0, 0       /* Set return value to 0 */
         jr $ra          /* Return */
 
@@ -419,6 +638,14 @@
         lw $s6, 36($a0) /* Load sp from env[9],  s6=*(long*)($a0+36) */
         lw $s7, 40($a0) /* Load sp from env[10], s7=*(long*)($a0+40) */
         lw $fp, 44($a0) /* Load sp from env[2],  fp=*(long*)($a0+44)  */
+#if !defined(__mips_soft_float)
+        ldc1 $f20, JB_F20 * 4($a0)
+        ldc1 $f22, JB_F22 * 4($a0)
+        ldc1 $f24, JB_F24 * 4($a0)
+        ldc1 $f26, JB_F26 * 4($a0)
+        ldc1 $f28, JB_F28 * 4($a0)
+        ldc1 $f30, JB_F30 * 4($a0)
+#endif
         li $v0, 1       /* Set return value to 1 */
         jr $ra          /* Return to the saved return address */
 
@@ -426,9 +653,50 @@
 
     /****************************************************************/
 
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the return address of the new thread's jmpbuf here, its
+     * SP at an 8-byte boundary, and its fp at 0. So the first _st_md_cxt_restore of the thread
+     * jumps here on the new stack, with none of its creator's frames. The restore jumps by $ra and
+     * leaves $t9 and $gp to the creator, so the entry finds its own address with bal, computes its
+     * own $gp from it, and calls _st_thread_main through $t9, as PIC code expects. The o32 caller
+     * reserves 16 bytes below the SP for the callee to save its four argument registers. The
+     * undefined return address ends DWARF unwinds here, and the null fp and ra end frame-pointer
+     * walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 2
+    _st_md_thread_start:
+    	.cfi_startproc
+    	.cfi_undefined $ra
+    	/*
+    	 * Explicit relocations, not the .cpload macro, because the file is assembled without
+    	 * -fPIC, which turns .cpload into the absolute address __gnu_local_gp, but also goes into
+    	 * the shared library.
+    	 */
+    	.set push
+    	.set noreorder
+    	.set nomacro
+        bal 1f                                      /* ra = 1f, the address of the next label */
+        nop
+    1:  lui $gp, %hi(_gp_disp)                      /* gp = the GOT pointer of this module, ... */
+        addiu $gp, $gp, %lo(_gp_disp)
+        addu $gp, $gp, $ra                         /* ... from ra, the run-time address of 1b */
+        lw $t9, %call16(_st_thread_main)($gp)      /* PIC callees compute their gp from t9 */
+        addiu $sp, $sp, -16                        /* The argument save area of the callee */
+    	.cfi_adjust_cfa_offset 16
+        move $fp, $zero
+        move $ra, $zero
+        jalr $t9
+        nop
+        /* _st_thread_main calls st_thread_exit, which never returns. */
+        break
+    	.set pop
+    	.cfi_endproc
+    	.size _st_md_thread_start, .-_st_md_thread_start
 
-
-
+    /****************************************************************/
 
 
 
@@ -454,6 +722,23 @@
     #define JB_S6  9    /* R23-R31, S0-S8, Subroutine register variable */
     #define JB_S7  10   /* R23-R31, S0-S8, Subroutine register variable */
     #define JB_S8  11   /* R23-R31, S0-S8, Subroutine register variable */
+    #define JB_F24 12   /* F24-F31, FS0-FS7, callee-saved FP registers */
+    #define JB_F25 13
+    #define JB_F26 14
+    #define JB_F27 15
+    #define JB_F28 16
+    #define JB_F29 17
+    #define JB_F30 18
+    #define JB_F31 19
+
+    /* Save F24-F31 as doubles with a 64-bit FPU, their low 32 bits with a 32-bit one, and nothing with soft float. */
+    #if defined(__loongarch_frlen) && __loongarch_frlen >= 64
+        #define FP_SAVE fst.d
+        #define FP_LOAD fld.d
+    #elif defined(__loongarch_frlen) && __loongarch_frlen == 32
+        #define FP_SAVE fst.s
+        #define FP_LOAD fld.s
+    #endif
 
     	.file "md_linux.S"
     	.text
@@ -475,6 +760,16 @@
         st.d	$r29, $r4, 72         /* Save r29 to env[9],  *(long*)($r4+72) = r29 */
         st.d	$r30, $r4, 80         /* Save r30 to env[10],  *(long*)($r4+80) = r30 */
         st.d	$r31, $r4, 88         /* Save r31 to env[11],  *(long*)($r4+88) = r31 */
+#if defined(FP_SAVE)
+        FP_SAVE	$f24, $r4, JB_F24 * 8 /* Save f24-f31 to env[12]-env[19] */
+        FP_SAVE	$f25, $r4, JB_F25 * 8
+        FP_SAVE	$f26, $r4, JB_F26 * 8
+        FP_SAVE	$f27, $r4, JB_F27 * 8
+        FP_SAVE	$f28, $r4, JB_F28 * 8
+        FP_SAVE	$f29, $r4, JB_F29 * 8
+        FP_SAVE	$f30, $r4, JB_F30 * 8
+        FP_SAVE	$f31, $r4, JB_F31 * 8
+#endif
         addi.w	$r12, $r0, 0          /* Set return value to 0 */
         move    $r4, $r12             /* Set return value to 0 */
         jirl	$r0, $r1, 0           /* Return */
@@ -500,11 +795,44 @@
         ld.d	$r29, $r4, 72        /* Load r29 from env[9],  r29=*(long*)($r4+72) */
         ld.d	$r30, $r4, 80        /* Load r30 from env[10],  r30=*(long*)($r4+80) */
         ld.d	$r31, $r4, 88        /* Load r31 from env[11],  r31=*(long*)($r4+88) */
+#if defined(FP_LOAD)
+        FP_LOAD	$f24, $r4, JB_F24 * 8 /* Load f24-f31 from env[12]-env[19] */
+        FP_LOAD	$f25, $r4, JB_F25 * 8
+        FP_LOAD	$f26, $r4, JB_F26 * 8
+        FP_LOAD	$f27, $r4, JB_F27 * 8
+        FP_LOAD	$f28, $r4, JB_F28 * 8
+        FP_LOAD	$f29, $r4, JB_F29 * 8
+        FP_LOAD	$f30, $r4, JB_F30 * 8
+        FP_LOAD	$f31, $r4, JB_F31 * 8
+#endif
         addi.w	$r12, $r0, 1         /* Set return value to 1 */
         move    $r4, $r12            /* Set return value to 1 */
         jirl	$r0, $r1, 0          /* Return to the saved return address */
 
     	.size _st_md_cxt_restore, .-_st_md_cxt_restore
+
+    /****************************************************************/
+
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the return address of the new thread's jmpbuf here, its
+     * SP at a 16-byte boundary, and its fp at 0. So the first _st_md_cxt_restore of the thread
+     * jumps here on the new stack, with none of its creator's frames. The undefined return
+     * address ends DWARF unwinds here, and the null fp and ra end frame-pointer walks.
+     */
+    	.globl _st_md_thread_start
+    	.type _st_md_thread_start, %function
+    	.align 2
+    _st_md_thread_start:
+    	.cfi_startproc
+    	.cfi_undefined 1         /* ra, $r1 */
+        move    $r22, $r0            /* fp = 0 */
+        move    $r1, $r0             /* ra = 0 */
+        bl      _st_thread_main
+        /* _st_thread_main calls st_thread_exit, which never returns. */
+        break   0
+    	.cfi_endproc
+    	.size _st_md_thread_start, .-_st_md_thread_start
 
     /****************************************************************/
 

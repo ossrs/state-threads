@@ -608,7 +608,9 @@ static int dgram_echo(void)
     CHECK(st_recvfrom(d.server, buf, sizeof(buf), (struct sockaddr *)&from, &fromlen, BLOCK_US) == 5);
     CHECK(!memcmp(buf, "hello", 5) && from_path(&from, fromlen, dgram_client_paths[0]));
     CHECK(st_recvfrom(d.server, buf, sizeof(buf), NULL, NULL, BLOCK_US) == 1 && buf[0] == '!');
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_recvfrom(d.server, buf, sizeof(buf), NULL, NULL, SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);
@@ -686,7 +688,9 @@ static int pair_stream(void)
 
     /* With nothing to read, st_read times out. */
     char c;
+    /* The timeout counts from the clock reading this yield takes. */
     st_utime_t start = st_utime();
+    st_thread_yield();
     errno = 0;
     CHECK(st_read(b, &c, 1, SHORT_US) == -1 && errno == ETIME);
     CHECK(st_utime() - start >= SHORT_US);

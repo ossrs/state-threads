@@ -1,14 +1,19 @@
 .PHONY: clean
 
-LDLIBS=../../obj/libst.a
-CFLAGS=-g -O0 -I../../obj -I.. -DDEBUG
+include ../tool.mk
+
+LDLIBS=$(ST_OBJ_DIR)/libst.a
+CFLAGS=-g -O0 -I$(ST_OBJ_DIR) -I.. -DDEBUG
 
 OS_NAME 	= $(shell uname -s)
 ST_TARGET 	= linux-debug
 ifeq ($(OS_NAME), Darwin)
 ST_TARGET	= darwin-debug
+# The CPU to build for: CPU_ARCHS from the environment, such as x86_64 on Apple Silicon, or the host CPU.
+ifndef CPU_ARCHS
 CPU_ARCHS 	= $(shell g++ -dM -E - </dev/null |grep -q '__x86_64' && echo x86_64)
 CPU_ARCHS 	+= $(shell g++ -dM -E - </dev/null |grep -q '__aarch64' && echo arm64)
+endif
 CFLAGS      += -arch $(CPU_ARCHS)
 endif
 
@@ -24,14 +29,14 @@ CLEAN_FILES = thread thread.dSYM
 ifneq ($(filter MINGW% MSYS%,$(OS_NAME)),)
 ST_TARGET   = win64-debug
 CC          = cl
-CFLAGS      = -nologo -Z7 -Od -I../../obj -I.. -DDEBUG
+CFLAGS      = -nologo -Z7 -Od -I$(ST_OBJ_DIR) -I.. -DDEBUG
 WARNFLAGS   = -W4
 LINK_OUT    = -Fe
 EXE         = .exe
 CLEAN_FILES += thread.exe thread.obj thread.ilk thread.pdb
 endif
 
-./thread$(EXE): thread.c ../tool.h $(LDLIBS)
+$(BIN_DIR)/thread$(EXE): thread.c ../tool.h $(LDLIBS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(WARNFLAGS) $(LINK_OUT)$@ $< $(LDLIBS)
 
 clean:

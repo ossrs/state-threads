@@ -74,6 +74,30 @@
 
     /****************************************************************/
 
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the PC of the new thread's jmpbuf here, its SP at a
+     * null return address, 8 mod 16 as at any function entry, and its rbp at 0. So the first
+     * _st_md_cxt_restore of the thread enters this function as if called from address 0, with
+     * none of its creator's registers. The null rbp ends frame-pointer walks such as backtrace(),
+     * and the undefined return address ends DWARF unwinds.
+     */
+    .globl __st_md_thread_start
+        .align 16
+    __st_md_thread_start:
+        .cfi_startproc
+        .cfi_undefined rip
+        xorl %ebp, %ebp
+        /* Align rsp to 16 at the call. */
+        subq $8, %rsp
+        .cfi_adjust_cfa_offset 8
+        call __st_thread_main
+        /* _st_thread_main calls st_thread_exit, which never returns. */
+        ud2
+        .cfi_endproc
+
+    /****************************************************************/
+
 
 
 
@@ -184,6 +208,27 @@
         csel x0, x1, x0, ne
 
         ret
+
+    /****************************************************************/
+
+    /*
+     * void _st_md_thread_start(void), the entry of a new thread, never returns.
+     * MD_INIT_THREAD_ENTRY in md.h points the link register of the new thread's jmpbuf here, its
+     * SP at a 16-byte boundary, and its x29 at 0. So the first _st_md_cxt_restore of the thread
+     * returns here on the new stack, with none of its creator's frames. The null x29 and x30 end
+     * frame-pointer walks such as backtrace(), and the undefined return address ends DWARF unwinds.
+     */
+     .globl __st_md_thread_start
+     .align 4
+    __st_md_thread_start:
+        .cfi_startproc
+        .cfi_undefined x30
+        mov x29, #0
+        mov x30, #0
+        bl __st_thread_main
+        /* _st_thread_main calls st_thread_exit, which never returns. */
+        brk #0
+        .cfi_endproc
 
     /****************************************************************/
 
