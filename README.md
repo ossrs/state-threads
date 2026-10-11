@@ -127,10 +127,6 @@ make win64-debug EXTRA_CFLAGS="-DMD_ASAN -fsanitize=address"
 
 The branch [srs](https://github.com/ossrs/state-threads/tree/srs) was patched and refined. See [CHANGELOG.md](CHANGELOG.md) for the changes and versions.
 
-Planned:
-
-- [ ] System: Support sendmmsg for UDP, [#12](https://github.com/ossrs/state-threads/issues/12).
-
 ## GDB Tools
 
 - [x] Support [nn_coroutines](https://github.com/ossrs/state-threads/issues/15#issuecomment-742218041), show number of coroutines.
